@@ -1,39 +1,74 @@
 """OCR çıktısından (tesseract TSV) kitap yapısını kurar: paragraf, şiir, dipnot, sahne ve bölüm."""
-import csv, glob, re, statistics as st, json, sys
 
-FN_START = re.compile(r'^\W{0,3}(\(\s*[\*9©]\s*[\)Y]|©\)|\(\*)\s*')
-MARK = re.compile(r"\(\s*\*\s*[\)Y]?")
+import contextlib
+import csv
+import difflib
+import importlib
+import os
+import re
+import statistics as st
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterable, Iterator
+from typing import Any, TypeVar
+
+T = TypeVar('T')
+np: Any = importlib.import_module('numpy')
+Image: Any = importlib.import_module('PIL.Image')
+
+FN_START = re.compile(r'^\W{0,3}(\(\s*[*9©]\s*[)Y]|©\)|\(\*)\s*')
+MARK = re.compile(r"\(\s*\*\s*[)Y]?")
 HEADER = re.compile(r"(\d+\s*$|^\d+\s*/)")
 IMG_DIR = 'desk'
 TESSERACT = 'tesseract'
 TESSERACT_ARGS = []
 LANG = 'tur'
 VERBOSE = False
-PAGE_NUM = re.compile(r"[\W\d]{0,2}\d{1,4}[\W\d]{0,2}")
+NON_LETTER = r"[^A-Za-zÇĞİÖŞÜçğıöşü_]"
+PAGE_NUM = re.compile(rf"{NON_LETTER}{{0,2}}[0-9]{{1,4}}{NON_LETTER}{{0,2}}")
 END_PUNCT = tuple('.!?:…"”\'»')
+EDGE_NOISE = ' \t\r\n\f\v|*©'
+BREAK_CHARS = set(' \t\r\n\f\v*#∴•·.,:;©°+')
+JUNK_TOKEN_CHARS = set('|İ![]{}')
+BAD_GAP_CHARS = set('<>»«|—')
+GAP_TRAILING_CHARS = set('.,!?;:"\'')
+
+
+def successive_pairs(iterable: Iterable[T]) -> Iterator[tuple[T, T]]:
+    iterator = iter(iterable)
+    try:
+        previous = next(iterator)
+    except StopIteration:
+        return
+    for current in iterator:
+        yield previous, current
+        previous = current
 
 
 def read_lines(f):
-    rows = list(csv.DictReader(open(f, encoding='utf-8'), delimiter='\t', quoting=csv.QUOTE_NONE))
+    with open(f, encoding='utf-8') as handle:
+        rows = list(csv.DictReader(handle, delimiter='\t', quoting=csv.QUOTE_NONE))
     L = {}
     for r in rows:
         if r['level'] != '5' or not (r['text'] or '').strip():
             continue
         k = (r['block_num'], r['par_num'], r['line_num'])
         x, y, w, h = map(int, (r['left'], r['top'], r['width'], r['height']))
-        L.setdefault(k, []).append(dict(x=x, y=y, r=x + w, b=y + h, t=r['text'], c=float(r['conf'])))
+        L.setdefault(k, []).append({'x': x, 'y': y, 'r': x + w, 'b': y + h, 't': r['text'], 'c': float(r['conf'])})
     out = []
     for ws in L.values():
         ws.sort(key=lambda w: w['x'])
         good = [w for w in ws if sum(ch.isalnum() for ch in w['t']) >= 2] or ws
-        out.append(dict(words=ws, y=int(st.median(w['y'] for w in good)), b=int(st.median(w['b'] for w in good))))
+        out.append({'words': ws, 'y': int(st.median(w['y'] for w in good)), 'b': int(st.median(w['b'] for w in good))})
     out.sort(key=lambda d: d['y'])
     return out
 
 
 def finalize(d, words):
     d['words'] = words
-    d['x'] = words[0]['x']; d['r'] = words[-1]['r']
+    d['x'] = words[0]['x']
+    d['r'] = words[-1]['r']
     d['t'] = ' '.join(w['t'] for w in words)
     d['conf'] = st.mean(w['c'] for w in words)
     d['h'] = d['b'] - d['y']
@@ -41,7 +76,7 @@ def finalize(d, words):
 
 
 def is_break_line(t):
-    return bool(re.fullmatch(r"[\s\*#∴•·.,:;©°+]+", t)) and ('*' in t or '∴' in t or len(t.strip()) <= 3)
+    return bool(t) and all(ch in BREAK_CHARS for ch in t) and ('*' in t or '∴' in t or len(t.strip()) <= 3)
 
 
 def letters(t):
@@ -61,7 +96,6 @@ def norm_hdr(t):
 
 def detect_headers(files):
     """Sayfaların tepesinde sık tekrarlanan satırları (koşan başlık) bul."""
-    import difflib
     tops = []
     for f in files:
         L = read_lines(f)
@@ -80,104 +114,142 @@ def detect_headers(files):
 
 
 def is_header(t):
-    import difflib
     n = norm_hdr(t)
     return bool(n) and any(difflib.SequenceMatcher(None, n, h).ratio() > 0.7 for h in HEADERS)
 
 
 def img_size(f):
-    import os
-    from PIL import Image
     p = os.path.join(IMG_DIR, os.path.basename(f)[:-4] + '.png')
     try:
-        return Image.open(p).size
-    except Exception:
+        with Image.open(p) as image:
+            return image.size
+    except OSError as exc:
+        if VERBOSE:
+            print(f'  sayfa görüntüsü okunamadı: {p} ({exc})', file=sys.stderr)
         return (2400, 3307)
 
 
-def page(f):
-    lines = [finalize(d, d['words']) for d in read_lines(f)]
-    if not lines:
-        return None
-    W, page_h = img_size(f)
-    # sayfa numarası (alt ya da üst)
+def open_image_copy(path):
+    with Image.open(path) as image:
+        return image.copy()
+
+
+def drop_page_numbers(lines, page_h):
     if lines and PAGE_NUM.fullmatch(lines[-1]['t'].strip()) and lines[-1]['y'] > page_h * 0.8:
         lines = lines[:-1]
     if lines and PAGE_NUM.fullmatch(lines[0]['t'].strip()) and lines[0]['y'] < page_h * 0.2:
         lines = lines[1:]
-    if not lines:
-        return None
-    # üst bilgi
+    return lines
+
+
+def drop_running_headers(lines, page_h):
     while lines and lines[0]['y'] < page_h * 0.15 and is_header(lines[0]['t']):
         lines = lines[1:]
-    if not lines:
-        return None
+    return lines
+
+
+def detect_top_title(lines, page_h, W):
     title = None
-    sp0 = [b['y'] - a['y'] for a, b in zip(lines[1:], lines[2:])]
+    if len(lines) <= 1:
+        return title, lines
+    sp0 = [b['y'] - a['y'] for a, b in successive_pairs(lines[1:])]
     lsp = st.median(sp0) if sp0 else 60
-    if len(lines) > 1 and lines[0]['y'] < page_h * 0.18 and lines[1]['y'] - lines[0]['y'] > 2 * lsp:
-        # üstte tek başına satır: ya üst bilgi ya da (ortalanmışsa ve büyük boşluk varsa) bölüm başlığı
-        xs_ = sorted(d['x'] for d in lines[1:] if d['x'] > 8); rs_ = sorted(d['r'] for d in lines[1:])
-        body_x = xs_[len(xs_) // 10] if xs_ else 0; body_r = rs_[int(len(rs_) * 0.9)] if rs_ else W
-        l0 = lines[0]
-        centered = abs((l0['x'] - body_x) - (body_r - l0['r'])) < 0.12 * (body_r - body_x) and l0['x'] - body_x > 60
-        if centered and lines[1]['y'] - lines[0]['y'] > 3.5 * lsp and not HEADER.search(l0['t']):
-            title = l0['t']
-        lines = lines[1:]
+    if lines[0]['y'] >= page_h * 0.18 or lines[1]['y'] - lines[0]['y'] <= 2 * lsp:
+        return title, lines
+
+    # Üstte tek başına satır: ya üst bilgi ya da ortalanmışsa bölüm başlığı.
+    xs_ = sorted(d['x'] for d in lines[1:] if d['x'] > 8)
+    rs_ = sorted(d['r'] for d in lines[1:])
+    body_x = xs_[len(xs_) // 10] if xs_ else 0
+    body_r = rs_[int(len(rs_) * 0.9)] if rs_ else W
+    l0 = lines[0]
+    centered = abs((l0['x'] - body_x) - (body_r - l0['r'])) < 0.12 * (body_r - body_x) and l0['x'] - body_x > 60
+    if centered and lines[1]['y'] - lines[0]['y'] > 3.5 * lsp and not HEADER.search(l0['t']):
+        title = l0['t']
+    return title, lines[1:]
+
+
+def estimate_text_bounds(lines):
     full = [d for d in lines if len(d['t']) > 40 and d['x'] > 8]
     if len(full) < 3:
-        R = max((d['r'] for d in lines), default=0); B = min((d['x'] for d in lines if d['x'] > 8), default=0)
+        R = max((d['r'] for d in lines), default=0)
+        B = min((d['x'] for d in lines if d['x'] > 8), default=0)
+        return R, B
+
+    hy = [d['r'] for d in lines if re.search(r'\w-$', d['t'])]
+    if len(hy) >= 3:
+        R = st.median(hy)
     else:
-        hy = [d['r'] for d in lines if re.search(r'\w-$', d['t'])]
-        if len(hy) >= 3:
-            R = st.median(hy)
-        else:
-            m = st.median(d['r'] for d in full)
-            rs = sorted(d['r'] for d in lines if d['r'] < m + 120); R = rs[int(len(rs) * 0.85)]
-        xs = sorted(d['x'] for d in full); B = xs[len(xs) // 7]
-    # kümelenme ile kenar: en az 3 satırın hizalandığı en sağ/en sol konum
-    def core(d):
-        ws = [w for w in d['words'] if sum(ch.isalpha() for ch in w['t']) >= 2 and w['c'] >= 50]
-        return (ws[0]['x'], ws[-1]['r']) if ws else (d['x'], d['r'])
-    cores = [core(d) for d in lines if len(d['t']) > 15]
+        m = st.median(d['r'] for d in full)
+        rs = sorted(d['r'] for d in lines if d['r'] < m + 120)
+        R = rs[int(len(rs) * 0.85)]
+    xs = sorted(d['x'] for d in full)
+    B = xs[len(xs) // 7]
+    return R, B
+
+
+def line_core(d):
+    ws = [w for w in d['words'] if sum(ch.isalpha() for ch in w['t']) >= 2 and w['c'] >= 50]
+    return (ws[0]['x'], ws[-1]['r']) if ws else (d['x'], d['r'])
+
+
+def cluster_text_bounds(lines, R, B):
+    # Kümelenme ile kenar: en az 3 satırın hizalandığı en sağ/en sol konum.
+    cores = [line_core(d) for d in lines if len(d['t']) > 15]
     rs_ = sorted((c[1] for c in cores), reverse=True)
     for r0 in rs_:
         if sum(1 for r in rs_ if abs(r - r0) <= 12) >= 3:
-            R = st.median([r for r in rs_ if abs(r - r0) <= 12]); break
+            R = st.median([r for r in rs_ if abs(r - r0) <= 12])
+            break
     xs_ = sorted(c[0] for c in cores if c[0] > 8)
     for x0 in xs_:
         if sum(1 for x in xs_ if abs(x - x0) <= 12) >= 3:
-            B = st.median([x for x in xs_ if abs(x - x0) <= 12]); break
+            B = st.median([x for x in xs_ if abs(x - x0) <= 12])
+            break
+    return R, B
+
+
+def junk_word(w, R, B):
+    outside_body = w['x'] > R + 30 or w['r'] < B - 15
+    low_signal = sum(ch.isalpha() for ch in w['t']) < 2 or w['c'] < 50
+    return outside_body and low_signal
+
+
+def classify_line(d, cleaned, B):
+    t = d['t']
+    if is_break_line(t):
+        return 'break'
+    if cleaned and re.search(r'\w-$', cleaned[-1]['t']) and abs(d['x'] - B) < 60 and letters(t) >= 1 and t[:1].islower():
+        return 'text'
+    noisy_short = letters(t) <= 3 and d['conf'] < 75 and not re.fullmatch(r'\W*SON\W*', t)
+    noisy = noisy_short or letters(t) < 2 or (d['conf'] < 45 and letters(t) < 6) or d['conf'] < 30
+    return None if noisy else 'text'
+
+
+def clean_ocr_lines(lines, B, R):
     cleaned = []
     for d in lines:
-        def junk(w):
-            return sum(ch.isalpha() for ch in w['t']) < 2 or w['c'] < 50
-        ws = [w for w in d['words'] if not ((w['x'] > R + 30 or w['r'] < B - 15) and junk(w))]
-        ws = [w for w in ws if not re.fullmatch(r"[|İ!\[\]{}]+", w['t'])] or ws
+        ws = [w for w in d['words'] if not junk_word(w, R, B)]
+        ws = [w for w in ws if not all(ch in JUNK_TOKEN_CHARS for ch in w['t'])] or ws
         ws = [w for w in ws if w['c'] >= 10]  # güven 0: süsleme/çizgi çöpü
         if not ws:
             continue
         d = finalize(d, ws)
         if d['x'] < B - 15:
             d['x'] = B
-        t = d['t']
-        if is_break_line(t):
-            d['kind'] = 'break'
-        elif cleaned and re.search(r'\w-$', cleaned[-1]['t']) and abs(d['x'] - B) < 60 and letters(t) >= 1 and t[:1].islower():
-            d['kind'] = 'text'
-        elif (letters(t) <= 3 and d['conf'] < 75 and not re.fullmatch(r'\W*SON\W*', t)) or letters(t) < 2 or (d['conf'] < 45 and letters(t) < 6) or (d['conf'] < 30):
-            continue  # gürültü
-        else:
-            d['kind'] = 'text'
-        cleaned.append(d)
-    lines = cleaned
-    hs = [d['h'] for d in lines if d['kind'] == 'text']
-    H = st.median(hs) if hs else 60
-    # dipnotlar
+        kind = classify_line(d, cleaned, B)
+        if kind:
+            d['kind'] = kind
+            cleaned.append(d)
+    return cleaned
+
+
+def split_footnotes(lines, page_h, H):
     notes, body = [], []
     in_fn = False
     for d in lines:
-        if not in_fn and d['kind'] == 'text' and d['y'] > page_h * 0.45 and FN_START.match(d['t']) and (d['h'] < H * 0.9 or d['t'].lstrip().startswith(('(', '©'))):
+        note_start = d['kind'] == 'text' and d['y'] > page_h * 0.45 and FN_START.match(d['t'])
+        if not in_fn and note_start and (d['h'] < H * 0.9 or d['t'].lstrip().startswith(('(', '©'))):
             in_fn = True
         if in_fn:
             if FN_START.match(d['t']):
@@ -186,77 +258,165 @@ def page(f):
                 notes[-1].append(d['t'])
         else:
             body.append(d)
-    notes = [join_lines(n) for n in notes]
-    # boşluklar: önce atlanmış satır var mı diye boşluğu yeniden OCR'la
-    body = recover_gaps(f, body, B, R)
+    return [join_lines(n) for n in notes], body
+
+
+def add_body_metrics(body, B, R):
     ys = [d['y'] for d in body]
-    sp = [b - a for a, b in zip(ys, ys[1:])]
+    sp = [b - a for a, b in successive_pairs(ys)]
     med = st.median(sp) if sp else 70
     for i, d in enumerate(body):
         d['gap'] = i > 0 and (d['y'] - body[i - 1]['y']) > 1.75 * med
         d['rel'] = d['x'] - B
         d['short'] = d['r'] < R - 110
         d['width'] = R - B
+
+
+def page(f):
+    lines = [finalize(d, d['words']) for d in read_lines(f)]
+    if not lines:
+        return None
+    W, page_h = img_size(f)
+    lines = drop_running_headers(drop_page_numbers(lines, page_h), page_h)
+    if not lines:
+        return None
+    title, lines = detect_top_title(lines, page_h, W)
+    if not lines:
+        return None
+    R, B = cluster_text_bounds(lines, *estimate_text_bounds(lines))
+    lines = clean_ocr_lines(lines, B, R)
+    hs = [d['h'] for d in lines if d['kind'] == 'text']
+    H = st.median(hs) if hs else 60
+    notes, body = split_footnotes(lines, page_h, H)
+    body = recover_gaps(f, body, B, R)
+    add_body_metrics(body, B, R)
     first_y = body[0]['y'] if body else 0
-    return dict(name=f, body=body, notes=notes, R=R, B=B, first_y=first_y, title=title, page_h=page_h)
+    return {'name': f, 'body': body, 'notes': notes, 'R': R, 'B': B, 'first_y': first_y, 'title': title, 'page_h': page_h}
+
+
+def gap_box(prev, cur, B, R):
+    return (max(0, B - 40), prev['b'] + 2, R + 40, cur['y'] - 2)
+
+
+def box_is_tall_enough(box):
+    return box[3] - box[1] > 25
+
+
+def run_gap_ocr(crop):
+    fd, tmp = tempfile.mkstemp(suffix='.png')
+    os.close(fd)
+    crop.save(tmp)
+    try:
+        return subprocess.run(
+            [TESSERACT, tmp, '-', '-l', LANG, '--psm', '6'] + TESSERACT_ARGS + ['tsv'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            check=False,
+        ).stdout
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+
+
+def group_tsv_words(tsv):
+    grouped = {}
+    rows = [row.split('\t') for row in tsv.splitlines()[1:]]
+    for row in rows:
+        if len(row) == 12 and row[0] == '5' and row[11].strip():
+            grouped.setdefault((row[2], row[3], row[4]), []).append((float(row[10]), row[11]))
+    return grouped
+
+
+def candidate_gap_lines(grouped, prev):
+    candidates = []
+    for words in grouped.values():
+        words = [(conf, text) for conf, text in words if re.search(r'\w', text)] or words
+        good = [text for conf, text in words if conf >= 55 and not any(ch in BAD_GAP_CHARS for ch in text)]
+        if good and len(good) == len(words):
+            candidates.append(' '.join(good))
+        elif gap_word_continues(prev, words):
+            candidates.append(words[0][1].lower())
+    return candidates
+
+
+def gap_word_continues(prev, words):
+    return (
+        re.search(r'\w-$', prev['t'])
+        and words
+        and short_lower_word(words[0][1])
+    )
+
+
+def short_lower_word(text):
+    text = text.lower().rstrip(''.join(GAP_TRAILING_CHARS))
+    return 1 <= len(text) <= 4 and all('a' <= ch <= 'z' or ch in 'çğıöşü' for ch in text)
+
+
+def normalize_gap_line(line, prev):
+    if re.search(r'\w-$', prev['t']) and 1 <= letters(line) <= 3:
+        return line.split(' ')[0].lower()
+    return line
+
+
+def useful_gap_line(line, prev):
+    return letters(line) >= 4 or (re.search(r'\w-$', prev['t']) and letters(line) >= 1 and line[:1].islower())
+
+
+def recovered_line_bounds(img, box):
+    crop = img.crop(box).convert('L')
+    ink = np.array(crop) < 128
+    cols = np.nonzero(ink.sum(0) > 0)[0]
+    if not len(cols):
+        return None
+    return box[0] + int(cols[0]), box[0] + int(cols[-1])
+
+
+def make_recovered_line(line, prev, cur, B, R, img, box):
+    line = normalize_gap_line(line, prev)
+    if not useful_gap_line(line, prev):
+        return None
+    recovered = {
+        'words': [],
+        'y': (prev['y'] + cur['y']) // 2,
+        'b': (prev['b'] + cur['y']) // 2,
+        'x': B,
+        'r': R,
+        't': line,
+        'conf': 80,
+        'h': prev['h'],
+        'kind': 'text',
+    }
+    bounds = recovered_line_bounds(img, box)
+    if bounds:
+        recovered['x'], recovered['r'] = bounds
+    return recovered
+
+
+def recover_gap_lines(prev, cur, B, R, img):
+    box = gap_box(prev, cur, B, R)
+    if not box_is_tall_enough(box):
+        return []
+    tsv = run_gap_ocr(img.crop(box))
+    candidates = candidate_gap_lines(group_tsv_words(tsv), prev)
+    return [line for line in (make_recovered_line(c, prev, cur, B, R, img, box) for c in candidates) if line]
 
 
 def recover_gaps(f, body, B, R):
-    import subprocess, os
-    from PIL import Image
     if len(body) < 4:
         return body
     ys = [d['y'] for d in body]
-    med = st.median(b - a for a, b in zip(ys, ys[1:]))
-    img = None
+    med = st.median(b - a for a, b in successive_pairs(ys))
+    img = open_image_copy(os.path.join(IMG_DIR, os.path.basename(f)[:-4] + '.png'))
     out = [body[0]]
-    for prev, d in zip(body, body[1:]):
-        if d['y'] - prev['y'] > 1.6 * med:
-            if img is None:
-                img = Image.open(os.path.join(IMG_DIR, os.path.basename(f)[:-4] + '.png'))
-            box = (max(0, B - 40), prev['b'] + 2, R + 40, d['y'] - 2)
-            if box[3] - box[1] > 25:
-                crop = img.crop(box)
-                import tempfile
-                fd, tmp = tempfile.mkstemp(suffix='.png'); os.close(fd)
-                crop.save(tmp)
-                tsv = subprocess.run([TESSERACT, tmp, '-', '-l', LANG, '--psm', '6'] + TESSERACT_ARGS + ['tsv'], capture_output=True,
-                                     text=True, encoding='utf-8', errors='replace').stdout
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                rows = [r.split('\t') for r in tsv.splitlines()[1:]]
-                glines = {}
-                for r in rows:
-                    if len(r) == 12 and r[0] == '5' and r[11].strip():
-                        glines.setdefault((r[2], r[3], r[4]), []).append((float(r[10]), r[11]))
-                cand_lines = []
-                for ws in glines.values():
-                    ws = [(c, t) for c, t in ws if re.search(r'\w', t)] or ws  # salt sembol çöplerini at
-                    good = [t for c, t in ws if c >= 55 and not re.search(r'[<>»«|—]', t)]
-                    # bütün kelimeler güvenilir olmalı (süs/çizgi çöpünü ele)
-                    if good and len(good) == len(ws):
-                        cand_lines.append(' '.join(good))
-                    elif re.search(r'\w-$', prev['t']) and ws and re.fullmatch(r"[a-zçğıöşü]{1,4}[.,!?;:\"'.]*", ws[0][1].lower()):
-                        cand_lines.append(ws[0][1].lower())
-                for ln in cand_lines:
-                    if re.search(r'\w-$', prev['t']) and 1 <= letters(ln) <= 3:
-                        ln = ln.split(' ')[0].lower()
-                    if letters(ln) >= 4 or (re.search(r'\w-$', prev['t']) and letters(ln) >= 1 and ln[:1].islower()):
-                        # girinti: piksel konumu bilinmiyor -> tireyle bitiyorsa satır içi devam say
-                        nd = dict(words=[], y=(prev['y'] + d['y']) // 2, b=(prev['b'] + d['y']) // 2,
-                                  x=B, r=R, t=ln, conf=80, h=prev['h'], kind='text')
-                        cr = img.crop(box).convert('L')
-                        import numpy as np
-                        a = np.array(cr) < 128
-                        cols = np.where(a.sum(0) > 0)[0]
-                        if len(cols):
-                            nd['x'] = box[0] + int(cols[0]); nd['r'] = box[0] + int(cols[-1])
-                        if VERBOSE:
-                            print('  atlanan satır kurtarıldı:', os.path.basename(f), ln, file=sys.stderr)
-                        out.append(nd)
-        out.append(d)
+    for prev, cur in successive_pairs(body):
+        if cur['y'] - prev['y'] > 1.6 * med:
+            for recovered in recover_gap_lines(prev, cur, B, R, img):
+                if VERBOSE:
+                    print('  atlanan satır kurtarıldı:', os.path.basename(f), recovered['t'], file=sys.stderr)
+                out.append(recovered)
+        out.append(cur)
     return out
 
 
@@ -279,8 +439,8 @@ def clean_text(s):
     s = re.sub(r'\s{2,}', ' ', s)
     s = re.sub(r'^[-—–]\s*', '– ', s)
     s = re.sub(r'\s[-—]\s', ' – ', s)
-    s = re.sub(r"[\s|*©]+$", '', s)
-    s = re.sub(r"^[©|*\s]+", '', s)
+    s = s.rstrip(EDGE_NOISE)
+    s = s.lstrip(EDGE_NOISE)
     s = re.sub(r'^[a-zı] (?=[A-ZÇĞİÖŞÜ])', '', s)
     s = re.sub(r'([.!?…":]) (?:[A-ZÇĞİÖŞÜ]{1,2}|[a-zı][A-ZÇĞİÖŞÜ])$', r'\1', s)
     s = re.sub(r'(\w)-\.$', r'\1.', s)
@@ -293,163 +453,323 @@ def open_ratio(lines):
     return len(op) / max(1, len(lines))
 
 
+def page_widths(pages):
+    return [p['R'] - p['B'] for p in pages if len(p['body']) > 15]
+
+
+def page_needs_width_fix(page, width):
+    return abs((page['R'] - page['B']) - width) > 0.05 * width
+
+
+def right_edge_is_more_stable(page):
+    left_count = sum(1 for d in page['body'] if abs(d['x'] - page['B']) < 25)
+    right_count = sum(1 for d in page['body'] if abs(d['r'] - page['R']) < 25)
+    return right_count > left_count
+
+
+def shift_left_edge(page, width):
+    new_left = page['R'] - width
+    for d in page['body']:
+        d['rel'] = d['rel'] + (page['B'] - new_left)
+    page['B'] = new_left
+
+
+def set_right_edge(page, width):
+    page['R'] = page['B'] + width
+
+
+def update_line_widths(page, width):
+    for d in page['body']:
+        d['width'] = width
+
+
+def update_short_flags(page):
+    for d in page['body']:
+        d['short'] = d['r'] < page['R'] - 110
+
+
+def normalize_page_width(page, width):
+    if page_needs_width_fix(page, width):
+        if right_edge_is_more_stable(page):
+            shift_left_edge(page, width)
+        else:
+            set_right_edge(page, width)
+        update_short_flags(page)
+    update_line_widths(page, width)
+
+
 def normalize(pages):
     """Sağ kenarı kitap genelindeki metin genişliğine göre düzelt (şiir ağırlıklı sayfalar için)."""
-    ws = [p['R'] - p['B'] for p in pages if len(p['body']) > 15]
-    if not ws:
-        return pages
-    W = st.median(ws)
-    for p in pages:
-        if abs((p['R'] - p['B']) - W) > 0.05 * W:
-            # hangi kenar güvenilir? daha çok satırın hizalandığı kenar
-            nb = sum(1 for d in p['body'] if abs(d['x'] - p['B']) < 25)
-            nr = sum(1 for d in p['body'] if abs(d['r'] - p['R']) < 25)
-            if nr > nb:
-                newB = p['R'] - W
-                for d in p['body']:
-                    d['rel'] = d['rel'] + (p['B'] - newB)
-                p['B'] = newB
-            else:
-                p['R'] = p['B'] + W
-            for d in p['body']:
-                d['short'] = d['r'] < p['R'] - 110
-        for d in p['body']:
-            d['width'] = W
-    return pages
+    widths = page_widths(pages)
+    if widths:
+        width = st.median(widths)
+        for page in pages:
+            normalize_page_width(page, width)
 
 
-def build(pages):
-    """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / break / note."""
-    blocks = []
-    cur = None  # açık paragraf (liste)
-
-    def flush():
-        nonlocal cur
-        if cur:
-            blocks.append(('p', clean_text(join_lines(cur))))
-        cur = None
-
+def build_items(pages):
     items = []
     for pg in pages:
         chapter_start = bool(pg.get('title')) or (pg['first_y'] > pg['page_h'] * 0.35 and len(pg['body']) > 3)
         if chapter_start:
-            items.append(dict(kind='chapter', title=pg.get('title')))
+            items.append({'kind': 'chapter', 'title': pg.get('title')})
         for i, d in enumerate(pg['body']):
-            d = dict(d); d['page_first'] = i == 0; d['chap'] = chapter_start
-            items.append(d)
+            items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
         for n in pg['notes']:
-            items.append(dict(kind='note', t=clean_text(n)))
+            items.append({'kind': 'note', 't': clean_text(n)})
+    return items
 
-    texts = [it for it in items if it['kind'] == 'text']
-    # şiir: girintili + kısa + diyalog değil, en az 2 ardışık
-    seq = [it for it in items if it['kind'] == 'text']
-    def base_cand(d):
-        return (d['rel'] > 60 and not re.match(r"^\W{0,2}[-—–]", d['t'])
-                and not re.match(r"^[\"“”'‘«]", d['t'])
-                and not re.search(r'\w-$', d['t']))
+
+def base_verse_candidate(d):
+    return (d['rel'] > 60 and not re.match(r"^\W{0,2}[-—–]", d['t'])
+            and not re.match(r"^[\"“”'‘«]", d['t'])
+            and not re.search(r'\w-$', d['t']))
+
+
+def paragraph_indent(seq):
     ind = sorted(d['rel'] for d in seq if 40 < d['rel'] < 400)
-    para_indent = ind[len(ind) // 2] if ind else 100
-    cands = []
+    return ind[len(ind) // 2] if ind else 100
+
+
+def starts_regular_paragraph(d, nxt):
+    return (
+        nxt is not None
+        and (
+            (not nxt['gap'] and not nxt['page_first'] and nxt['rel'] < 40)
+            or (nxt['page_first'] and nxt['rel'] < 40 and not d['short'])
+        )
+    )
+
+
+def verse_candidates(seq):
+    candidates = []
     for j, d in enumerate(seq):
         d['verse'] = False
         nxt = seq[j + 1] if j + 1 < len(seq) else None
-        para_start = nxt is not None and not nxt['gap'] and not nxt['page_first'] and nxt['rel'] < 40
-        if nxt is not None and nxt['page_first'] and nxt['rel'] < 40 and not d['short']:
-            para_start = True
-        cands.append(base_cand(d) and not para_start)
-    # şiir: en az 3 ardışık aday satır (kıta boşlukları dahil)
+        candidates.append(base_verse_candidate(d) and not starts_regular_paragraph(d, nxt))
+    return candidates
+
+
+def candidate_runs(seq, candidates):
     j = 0
     while j < len(seq):
-        if not cands[j]:
-            j += 1; continue
+        if not candidates[j]:
+            j += 1
+            continue
         k = j
-        while k + 1 < len(seq) and cands[k + 1]:
+        while k + 1 < len(seq) and candidates[k + 1]:
             k += 1
-        run = seq[j:k + 1]
+        yield seq[j:k + 1]
+        j = k + 1
+
+
+def mark_indented_verses(seq):
+    # şiir: girintili + kısa + diyalog değil, en az 2 ardışık
+    para_indent = paragraph_indent(seq)
+    for run in candidate_runs(seq, verse_candidates(seq)):
         deep = all(d['rel'] > 1.6 * para_indent for d in run)
         if (deep and len(run) >= 2) or (len(run) >= 3 and open_ratio(run) >= 0.3):
             for d in run:
                 d['verse'] = True
-        j = k + 1
-    # şiir (2): boşluklarla çevrili, bütün satırları kısa olan blok (girintisiz ninni/türkü dizilişi)
+
+
+def is_short_verse_line(d):
+    return (d['r'] - (d['x'] - d['rel'])) < 0.9 * d['width'] and not re.search(r'\w-$', d['t']) \
+        and not re.match(r"^\W{0,2}[-—–\"“”'‘«]", d['t'])
+
+
+def mark_short_verse_group(group):
+    if not 2 <= len(group) <= 16:
+        return
+    widths = [(d['r'] - (d['x'] - d['rel'])) / d['width'] for d in group]
+    if all(is_short_verse_line(d) for d in group) and (st.mean(widths) < 0.75 or open_ratio(group) >= 0.3):
+        for d in group:
+            d['verse'] = True
+
+
+def mark_short_verses(items):
+    # Şiir (2): boşluklarla çevrili, bütün satırları kısa olan blok (girintisiz ninni/türkü dizilişi).
     group = []
-    def close_group():
-        if 2 <= len(group) <= 16:
-            def short_line(d):
-                return (d['r'] - (d['x'] - d['rel'])) < 0.9 * d['width'] and not re.search(r'\w-$', d['t']) \
-                    and not re.match(r"^\W{0,2}[-—–\"“”'‘«]", d['t'])
-            widths = [(d['r'] - (d['x'] - d['rel'])) / d['width'] for d in group]
-            if all(short_line(d) for d in group) and (st.mean(widths) < 0.75 or open_ratio(group) >= 0.3):
-                for d in group:
-                    d['verse'] = True
-        group.clear()
     prev_closed = True
     for it in items:
         if it['kind'] != 'text':
-            close_group(); prev_closed = True; continue
+            mark_short_verse_group(group)
+            group.clear()
+            prev_closed = True
+            continue
         if it['gap']:
-            close_group(); prev_closed = True
+            mark_short_verse_group(group)
+            group.clear()
+            prev_closed = True
         if prev_closed:
-            group.append(it); prev_closed = False
+            group.append(it)
+            prev_closed = False
         elif group:
             group.append(it)
     # son grup: arkasından boşluk gelmedikçe şiir sayma
     group.clear()
-    # yeni grup yalnızca boşluktan sonra başlar; boşluksuz paragraflar grubu bozar
-    for j, d in enumerate(seq):
+
+
+def mark_chapter_numbers(seq):
+    # Yeni grup yalnızca boşluktan sonra başlar; boşluksuz paragraflar grubu bozar.
+    for d in seq:
         if d['chap'] and d['rel'] > 150 and not d['gap'] and re.fullmatch(r"[-\s]*[0-9IJl]{1,3}[.\-\s]*", d['t']):
             d['kind'] = 'chapnum'
 
-    prev = None
-    verse_buf = []
 
-    def flush_verse(cls):
-        nonlocal verse_buf
-        if verse_buf:
-            blocks.append(('verse', [clean_text(v) for v in verse_buf], cls))
-        verse_buf = []
+def prepare_text_items(items):
+    seq = [it for it in items if it['kind'] == 'text']
+    mark_indented_verses(seq)
+    mark_short_verses(items)
+    mark_chapter_numbers(seq)
 
-    in_epigraph = False
-    for it in items:
-        k = it['kind']
-        if k == 'chapter':
-            flush(); flush_verse('verse'); blocks.append(('chapter', it.get('title'))); in_epigraph = True; prev = None; continue
-        if k == 'note':
-            blocks.append(('note', it['t'])); continue
-        if k == 'chapnum':
-            continue
-        if k == 'break':
-            flush(); flush_verse('epigraph' if in_epigraph else 'verse')
-            if blocks and blocks[-1][0] not in ('break', 'chapter'):
-                blocks.append(('break',))
-            prev = None; continue
-        t = it['t']
-        if prev is not None and re.search(r'\w-$', prev['t']) and t[:1].islower():
-            it['gap'] = False; it['rel'] = 0
-        if re.fullmatch(r'\W*SON\W*', t):
-            flush(); flush_verse('verse'); blocks.append(('end',)); continue
-        if it['gap'] and prev is not None and it.get('verse') and prev.get('verse'):
-            flush_verse('verse'); verse_buf.append(t); prev = it; continue
-        if it['gap'] and prev is not None and (it.get('verse') or prev.get('verse')) and not in_epigraph:
-            flush(); flush_verse('verse')
-            it['gap'] = False
-        if it['gap'] and prev is not None:
-            flush(); flush_verse('epigraph' if in_epigraph else 'verse')
-            if in_epigraph:
-                in_epigraph = False
-            elif blocks and blocks[-1][0] not in ('break', 'chapter'):
-                blocks.append(('break',))
-        if in_epigraph and not (it['rel'] > 150):
-            in_epigraph = False; flush_verse('epigraph')
-        if it['verse'] or in_epigraph:
-            flush(); verse_buf.append(t); prev = it; continue
-        flush_verse('verse')
-        newpara = (cur is None or it['rel'] > 60 or
-                   (prev is not None and prev['short'] and prev['t'].rstrip(' |*').endswith(END_PUNCT)))
-        if newpara:
-            flush(); cur = [t]
+
+class BlockBuilder:
+    def __init__(self):
+        self.blocks: list = []
+        self.cur: list = []
+        self.prev = None
+        self.verse_buf: list = []
+        self.in_epigraph = False
+
+    def flush(self):
+        if self.cur:
+            self.blocks.append(('p', clean_text(join_lines(self.cur))))
+        self.cur = []
+
+    def flush_verse(self, cls):
+        if self.verse_buf:
+            self.blocks.append(('verse', [clean_text(v) for v in self.verse_buf], cls))
+        self.verse_buf = []
+
+    def verse_class(self):
+        return 'epigraph' if self.in_epigraph else 'verse'
+
+    def append_break(self):
+        if self.blocks and self.blocks[-1][0] not in ('break', 'chapter'):
+            self.blocks.append(('break',))
+
+    def start_chapter(self, title):
+        self.flush()
+        self.flush_verse('verse')
+        self.blocks.append(('chapter', title))
+        self.in_epigraph = True
+        self.prev = None
+
+    def add_note(self, text):
+        self.blocks.append(('note', text))
+
+    def add_break(self):
+        self.flush()
+        self.flush_verse(self.verse_class())
+        self.append_break()
+        self.prev = None
+
+    def add_end(self):
+        self.flush()
+        self.flush_verse('verse')
+        self.blocks.append(('end',))
+
+    def merge_hyphenated_line(self, item, text):
+        if self.prev is not None and re.search(r'\w-$', self.prev['t']) and text[:1].islower():
+            item['gap'] = False
+            item['rel'] = 0
+
+    def is_continued_verse_gap(self, item):
+        return item['gap'] and self.prev is not None and item.get('verse') and self.prev.get('verse')
+
+    def keep_verse_gap(self, item, text):
+        if not self.is_continued_verse_gap(item):
+            return
+        self.flush_verse('verse')
+        self.verse_buf.append(text)
+        self.prev = item
+
+    def absorb_verse_gap(self, item):
+        has_verse_neighbor = self.prev is not None and (item.get('verse') or self.prev.get('verse'))
+        if item['gap'] and has_verse_neighbor and not self.in_epigraph:
+            self.flush()
+            self.flush_verse('verse')
+            item['gap'] = False
+
+    def close_paragraph_gap(self, item):
+        if not (item['gap'] and self.prev is not None):
+            return
+        self.flush()
+        self.flush_verse(self.verse_class())
+        if self.in_epigraph:
+            self.in_epigraph = False
         else:
-            cur.append(t)
-        prev = it
-    flush(); flush_verse('verse')
-    return blocks
+            self.append_break()
+
+    def close_epigraph_if_needed(self, item):
+        if self.in_epigraph and not (item['rel'] > 150):
+            self.in_epigraph = False
+            self.flush_verse('epigraph')
+
+    def is_verse_line(self, item):
+        return item['verse'] or self.in_epigraph
+
+    def add_verse_line(self, item, text):
+        self.flush()
+        self.verse_buf.append(text)
+        self.prev = item
+
+    def starts_new_paragraph(self, item):
+        return (
+            not self.cur
+            or item['rel'] > 60
+            or (self.prev is not None and self.prev['short'] and self.prev['t'].rstrip(' |*').endswith(END_PUNCT))
+        )
+
+    def add_paragraph_line(self, item, text):
+        self.flush_verse('verse')
+        if self.starts_new_paragraph(item):
+            self.flush()
+            self.cur = [text]
+        else:
+            self.cur.append(text)
+        self.prev = item
+
+    def add_text(self, item):
+        text = item['t']
+        self.merge_hyphenated_line(item, text)
+        if re.fullmatch(r'\W*SON\W*', text):
+            self.add_end()
+            return
+        if self.is_continued_verse_gap(item):
+            self.keep_verse_gap(item, text)
+            return
+        self.absorb_verse_gap(item)
+        self.close_paragraph_gap(item)
+        self.close_epigraph_if_needed(item)
+        if self.is_verse_line(item):
+            self.add_verse_line(item, text)
+            return
+        self.add_paragraph_line(item, text)
+
+    def add_item(self, item):
+        kind = item['kind']
+        if kind == 'chapter':
+            self.start_chapter(item.get('title'))
+        elif kind == 'note':
+            self.add_note(item['t'])
+        elif kind == 'break':
+            self.add_break()
+        elif kind != 'chapnum':
+            self.add_text(item)
+
+    def finish(self):
+        self.flush()
+        self.flush_verse('verse')
+        return self.blocks
+
+
+def build(pages):
+    """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / break / note."""
+    items = build_items(pages)
+    prepare_text_items(items)
+    builder = BlockBuilder()
+    for item in items:
+        builder.add_item(item)
+    return builder.finish()

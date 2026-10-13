@@ -7,7 +7,9 @@ Kullanım:
 
 Ayrıntılar için README.md dosyasına bakın.
 """
+
 import argparse
+import importlib
 import json
 import os
 import re
@@ -16,44 +18,47 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, NoReturn
 
-try:
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
-except Exception:
-    pass
+for stream in (sys.stdout, sys.stderr):
+    reconfigure = getattr(stream, 'reconfigure', None)
+    if reconfigure:
+        reconfigure(encoding='utf-8')
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 
-def hata(msg):
+def hata(msg) -> NoReturn:
     print('\nHATA: ' + msg, file=sys.stderr)
     sys.exit(1)
 
 
-fitz = np = Image = None
-structure = epub_writer = None
+fitz: Any = None
+np: Any = None
+Image: Any = None
+structure: Any = None
+epub_writer: Any = None
 
 
 # ---------------------------------------------------------------- bağımlılıklar
 def load_dependencies():
     global fitz, np, Image, structure, epub_writer
     try:
-        import pymupdf as _fitz  # PyMuPDF >= 1.24
+        _fitz = importlib.import_module('pymupdf')  # PyMuPDF >= 1.24
     except ImportError:
         try:
-            import fitz as _fitz
+            _fitz = importlib.import_module('fitz')
         except ImportError:
             hata("PyMuPDF kurulu değil. Şunu çalıştırın:  pip install -r requirements.txt")
     try:
-        import numpy as _np
-        from PIL import Image as _Image
+        _np = importlib.import_module('numpy')
+        _Image = importlib.import_module('PIL.Image')
     except ImportError:
         hata("Pillow/numpy kurulu değil. Şunu çalıştırın:  pip install -r requirements.txt")
 
-    import structure as _structure
-    import epub_writer as _epub_writer
+    _structure = importlib.import_module('structure')
+    _epub_writer = importlib.import_module('epub_writer')
 
     fitz = _fitz
     np = _np
@@ -88,7 +93,7 @@ def tessdata_ayari(tess):
     if os.path.isfile(os.path.join(yerel, 'tur.traineddata')):
         return ['--tessdata-dir', yerel]
     out = subprocess.run([tess, '--list-langs'], capture_output=True, text=True,
-                         encoding='utf-8', errors='replace')
+                         encoding='utf-8', errors='replace', check=False)
     if 'tur' in (out.stdout + out.stderr).split():
         return []
     hata("Tesseract'ta Türkçe dil paketi (tur) yok.\n"
@@ -161,9 +166,36 @@ def tarama_bilgisi(page):
                     best, bpc = d, info.get('bpc', 8)
         if best:
             return int(min(600, max(300, round(best / 50) * 50))), bpc == 1
-    except Exception:
-        pass
+    except (AttributeError, KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+        print(f'  uyarı: sayfa tarama bilgisi okunamadı ({exc})', file=sys.stderr)
     return 300, False
+
+
+def hazir_sayfa_adlari(img_dir, no):
+    return sorted(f for f in os.listdir(img_dir) if f.startswith(f'p-{no:04d}'))
+
+
+def sayfa_goruntusu(page, dpi):
+    d, bilevel = tarama_bilgisi(page)
+    pix = page.get_pixmap(dpi=dpi or d, colorspace=fitz.csGRAY)
+    im = Image.frombytes('L', (pix.width, pix.height), pix.samples)
+    return im, bilevel
+
+
+def sayfa_parcalari(im):
+    if im.width <= im.height * 1.1:
+        return [('', im)]
+    c = cilt_yeri(im)
+    return [('a', im.crop((0, 0, c, im.height))), ('b', im.crop((c, 0, im.width, im.height)))]
+
+
+def sayfa_parcasi_kaydet(img_dir, no, ek, im, bilevel):
+    ad = f'p-{no:04d}{ek}'
+    im = egiklik_duzelt(im)
+    if bilevel:  # siyah-beyaz taramayı döndürme sonrası yeniden keskinleştir
+        im = im.point(lambda v: 255 if v > 128 else 0)
+    im.save(os.path.join(img_dir, ad + '.png'))
+    return ad
 
 
 def sayfalari_hazirla(doc, img_dir, dpi, atla, yeniden):
@@ -174,25 +206,14 @@ def sayfalari_hazirla(doc, img_dir, dpi, atla, yeniden):
         no = i + 1
         if no in atla:
             continue
-        hazir = sorted(f for f in os.listdir(img_dir) if f.startswith(f'p-{no:04d}'))
+        hazir = hazir_sayfa_adlari(img_dir, no)
         if hazir and not yeniden:
             adlar += [f[:-4] for f in hazir]
             continue
-        d, bilevel = tarama_bilgisi(doc[i])
-        pix = doc[i].get_pixmap(dpi=dpi or d, colorspace=fitz.csGRAY)
-        im = Image.frombytes('L', (pix.width, pix.height), pix.samples)
-        if im.width > im.height * 1.1:
-            c = cilt_yeri(im)
-            parcalar = [('a', im.crop((0, 0, c, im.height))), ('b', im.crop((c, 0, im.width, im.height)))]
-        else:
-            parcalar = [('', im)]
+        im, bilevel = sayfa_goruntusu(doc[i], dpi)
+        parcalar = sayfa_parcalari(im)
         for ek, p in parcalar:
-            ad = f'p-{no:04d}{ek}'
-            p = egiklik_duzelt(p)
-            if bilevel:  # siyah-beyaz taramayı döndürme sonrası yeniden keskinleştir
-                p = p.point(lambda v: 255 if v > 128 else 0)
-            p.save(os.path.join(img_dir, ad + '.png'))
-            adlar.append(ad)
+            adlar.append(sayfa_parcasi_kaydet(img_dir, no, ek, p, bilevel))
         print(f'\r  sayfalar hazırlanıyor: {no}/{n}', end='', flush=True)
     print()
     return adlar
@@ -200,7 +221,7 @@ def sayfalari_hazirla(doc, img_dir, dpi, atla, yeniden):
 
 def ocr(adlar, img_dir, tsv_dir, tess, tess_args, is_sayisi, yeniden):
     os.makedirs(tsv_dir, exist_ok=True)
-    env = dict(os.environ, OMP_THREAD_LIMIT='1')
+    env = {**os.environ, 'OMP_THREAD_LIMIT': '1'}
     yapilacak = [a for a in adlar if yeniden or not os.path.isfile(os.path.join(tsv_dir, a + '.tsv'))]
     toplam = len(yapilacak)
     if not toplam:
@@ -212,7 +233,7 @@ def ocr(adlar, img_dir, tsv_dir, tess, tess_args, is_sayisi, yeniden):
     def tek(ad):
         subprocess.run([tess, os.path.join(img_dir, ad + '.png'), os.path.join(tsv_dir, ad),
                         '-l', 'tur', '--psm', '4'] + tess_args + ['tsv'],
-                       capture_output=True, env=env)
+                       capture_output=True, env=env, check=False)
         bitti[0] += 1
         gecen = time.time() - t0
         kalan = gecen / bitti[0] * (toplam - bitti[0])
@@ -248,8 +269,7 @@ def kunye_mi(tsv):
     return toc >= 4 and toc >= 0.5 * len(satirlar)
 
 
-# ---------------------------------------------------------------- ana akış
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description='Taranmış Türkçe kitap PDF\'ini EPUB\'a çevirir.')
     ap.add_argument('pdf', help='PDF dosyası')
     ap.add_argument('--title', dest='title', help='Kitap adı (verilmezse dosya adından)')
@@ -279,94 +299,162 @@ def main():
     ap.add_argument('--yeniden', dest='force', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument('--verbose', dest='verbose', action='store_true', help='Ayrıntılı çıktı (kurtarılan satırlar vb.)')
     ap.add_argument('--ayrinti', dest='verbose', action='store_true', help=argparse.SUPPRESS)
-    args = ap.parse_args()
+    return ap
 
+
+def prepare_paths(args):
     pdf = os.path.abspath(args.pdf)
     if not os.path.isfile(pdf):
         hata(f'Dosya bulunamadı: {pdf}')
-    load_dependencies()
 
-    kok = os.path.splitext(pdf)[0]
-    calisma = kok + '_work'
-    img_dir = os.path.join(calisma, 'pages')
-    tsv_dir = os.path.join(calisma, 'ocr')
-    if args.force and os.path.isdir(calisma):
-        shutil.rmtree(calisma)
+    root = os.path.splitext(pdf)[0]
+    work_dir = root + '_work'
+    paths = {
+        'pdf': pdf,
+        'root': root,
+        'work_dir': work_dir,
+        'img_dir': os.path.join(work_dir, 'pages'),
+        'tsv_dir': os.path.join(work_dir, 'ocr'),
+    }
+    if args.force and os.path.isdir(work_dir):
+        shutil.rmtree(work_dir)
+    return paths
+
+
+def book_title(args, doc, root):
+    meta_title = (doc.metadata or {}).get('title') or ''
+    if args.title:
+        return args.title
+    if len(meta_title.strip()) > 2:
+        return meta_title.strip()
+    return os.path.basename(root).replace('_', ' ')
+
+
+def image_and_ocr(doc, args, paths, title, tess, tess_args):
+    n = len(doc)
+    skip = sayfa_araligi(args.skip, n)
+    skip.add(args.cover_page)  # kapak resim olarak eklenir, metin olarak değil
+    print(f'"{title}" — {n} sayfa')
+
+    print('1/4 Sayfalar görüntüye çevriliyor')
+    names = sayfalari_hazirla(doc, paths['img_dir'], args.dpi, skip, args.force)
+
+    print('2/4 Türkçe OCR')
+    ocr(names, paths['img_dir'], paths['tsv_dir'], tess, tess_args, args.jobs, args.force)
+    return names
+
+
+def text_files_from_ocr(names, tsv_dir):
+    return [f for f in (os.path.join(tsv_dir, name + '.tsv') for name in names) if os.path.isfile(f)]
+
+
+def filter_non_text_pages(files):
+    bas, son = max(3, int(len(files) * 0.12)), max(2, int(len(files) * 0.05))
+    dropped = [f for i, f in enumerate(files) if (i < bas or i >= len(files) - son) and kunye_mi(f)]
+    if dropped:
+        print('  metin dışı sayfalar atlandı (künye/içindekiler/arka kapak): ' +
+              ', '.join(os.path.basename(f)[2:-4].lstrip('0') for f in dropped))
+    return [f for f in files if f not in dropped]
+
+
+def build_blocks_from_files(files, img_dir, tess, tess_args, verbose):
+    structure.IMG_DIR = img_dir
+    structure.TESSERACT = tess
+    structure.VERBOSE = verbose
+    if tess_args:
+        # boşluk kurtarma adımı da aynı dil klasörünü kullansın
+        structure.TESSERACT_ARGS = tess_args
+
+    files = filter_non_text_pages(files)
+    structure.HEADERS[:] = structure.detect_headers(files)
+    pages = [p for p in (structure.page(f) for f in files) if p]
+    structure.normalize(pages)
+    return structure.build(pages)
+
+
+def drop_short_preface(blocks):
+    first = next((i for i, b in enumerate(blocks) if b[0] == 'chapter'), None)
+    if not first:
+        return blocks
+    before = [b for b in blocks[:first] if b[0] == 'p']
+    if len(before) < 25:
+        print(f'  ilk bölümden önceki {len(before)} paragraf (künye vb.) atıldı')
+        return blocks[first:]
+    return blocks
+
+
+def drop_duplicate_title_page(blocks, title):
+    chapters = [i for i, b in enumerate(blocks) if b[0] == 'chapter']
+    if len(chapters) < 2:
+        return blocks
+
+    first_title = blocks[chapters[0]][1] if len(blocks[chapters[0]]) > 1 else None
+    short_first = sum(1 for b in blocks[chapters[0]:chapters[1]] if b[0] == 'p') <= 6
+    later_titles = (structure.norm_hdr(blocks[i][1] or '') for i in chapters[1:])
+    known_titles = (structure.norm_hdr(title), *later_titles)
+    if first_title and short_first and first_title.isupper() and structure.norm_hdr(first_title) in known_titles:
+        print(f'  ön sayfa ("{first_title}") bölüm olarak alınmadı')
+        return blocks[chapters[1]:]
+    return blocks
+
+
+def build_book_structure(names, paths, tess, tess_args, args, title):
+    print('3/4 Kitap yapısı kuruluyor (paragraf, bölüm, şiir, dipnot)')
+    files = text_files_from_ocr(names, paths['tsv_dir'])
+    blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose)
+    blocks = drop_short_preface(blocks)
+    blocks = drop_duplicate_title_page(blocks, title)
+    with open(os.path.join(paths['work_dir'], 'blocks.json'), 'w', encoding='utf-8') as f:
+        json.dump(blocks, f, ensure_ascii=False, indent=0)
+    return blocks
+
+
+def epub_config(args, paths, title, cover):
+    cfg = {
+        'title': title,
+        'author': args.author,
+        'translator': args.translator,
+        'publisher': args.publisher,
+        'cover': cover,
+        'out': os.path.abspath(args.output) if args.output else paths['root'] + '.epub',
+    }
+    if args.config:
+        with open(args.config, encoding='utf-8') as f:
+            cfg.update(json.load(f))
+    return cfg
+
+
+def write_output(doc, args, paths, title, blocks):
+    print('4/4 EPUB yazılıyor')
+    cover = os.path.join(paths['work_dir'], 'cover.png')
+    kapak_kaydet(doc, args.cover_page, cover)
+    out, notes, chapters = epub_writer.run(epub_config(args, paths, title, cover), blocks)
+    paragraphs = sum(1 for b in blocks if b[0] == 'p')
+    verses = sum(1 for b in blocks if b[0] == 'verse')
+    titles = [b[1] for b in blocks if b[0] == 'chapter' and len(b) > 1 and b[1]]
+
+    print(f'\nTamam: {out}')
+    print(f'  {chapters} bölüm, {paragraphs} paragraf, {verses} şiir bloğu, {notes} dipnot')
+    if titles:
+        print('  bölümler: ' + ', '.join(titles[:30]) + (' ...' if len(titles) > 30 else ''))
+    print(f'  (ara dosyalar: {paths["work_dir"]} — tekrar çalıştırınca OCR baştan yapılmaz)')
+
+
+# ---------------------------------------------------------------- ana akış
+def main():
+    args = build_parser().parse_args()
+    paths = prepare_paths(args)
+    pdf = os.path.abspath(args.pdf)
+    load_dependencies()
 
     tess = tesseract_bul(args.tesseract)
     tess_args = tessdata_ayari(tess)
 
     doc = fitz.open(pdf)
-    n = len(doc)
-    meta_title = (doc.metadata or {}).get('title') or ''
-    baslik = args.title or (meta_title.strip() if len(meta_title.strip()) > 2 else
-                            os.path.basename(kok).replace('_', ' '))
-    atla = sayfa_araligi(args.skip, n)
-    atla.add(args.cover_page)  # kapak resim olarak eklenir, metin olarak değil
-    print(f'"{baslik}" — {n} sayfa')
-
-    print('1/4 Sayfalar görüntüye çevriliyor')
-    adlar = sayfalari_hazirla(doc, img_dir, args.dpi, atla, args.force)
-
-    print('2/4 Türkçe OCR')
-    ocr(adlar, img_dir, tsv_dir, tess, tess_args, args.jobs, args.force)
-
-    print('3/4 Kitap yapısı kuruluyor (paragraf, bölüm, şiir, dipnot)')
-    structure.IMG_DIR = img_dir
-    structure.TESSERACT = tess
-    structure.VERBOSE = args.verbose
-    if tess_args:
-        # boşluk kurtarma adımı da aynı dil klasörünü kullansın
-        structure.TESSERACT_ARGS = tess_args
-    files = [os.path.join(tsv_dir, a + '.tsv') for a in adlar]
-    files = [f for f in files if os.path.isfile(f)]
-    # baştaki ve sondaki künye / içindekiler / arka kapak sayfalarını ele
-    bas, son = max(3, int(len(files) * 0.12)), max(2, int(len(files) * 0.05))
-    atilan = [f for i, f in enumerate(files) if (i < bas or i >= len(files) - son) and kunye_mi(f)]
-    if atilan:
-        print('  metin dışı sayfalar atlandı (künye/içindekiler/arka kapak): ' +
-              ', '.join(os.path.basename(f)[2:-4].lstrip('0') for f in atilan))
-    files = [f for f in files if f not in atilan]
-    structure.HEADERS[:] = structure.detect_headers(files)
-    sayfalar = [p for p in (structure.page(f) for f in files) if p]
-    bloklar = structure.build(structure.normalize(sayfalar))
-
-    # İlk bölümden önceki künye/önsöz kırıntılarını at (azsa)
-    ilk = next((i for i, b in enumerate(bloklar) if b[0] == 'chapter'), None)
-    if ilk:
-        once = [b for b in bloklar[:ilk] if b[0] == 'p']
-        if len(once) < 25:
-            print(f'  ilk bölümden önceki {len(once)} paragraf (künye vb.) atıldı')
-            bloklar = bloklar[ilk:]
-    # Kitap adını büyük harfle tekrarlayan kısa ön sayfa (iç kapak, yazar tanıtımı) bölüm sayılmasın
-    chs = [i for i, b in enumerate(bloklar) if b[0] == 'chapter']
-    if len(chs) >= 2:
-        t0 = bloklar[chs[0]][1] if len(bloklar[chs[0]]) > 1 else None
-        kisa = sum(1 for b in bloklar[chs[0]:chs[1]] if b[0] == 'p') <= 6
-        if t0 and kisa and t0.isupper() and structure.norm_hdr(t0) in (
-                structure.norm_hdr(baslik), *(structure.norm_hdr(bloklar[i][1] or '') for i in chs[1:])):
-            print(f'  ön sayfa ("{t0}") bölüm olarak alınmadı')
-            bloklar = bloklar[chs[1]:]
-    with open(os.path.join(calisma, 'blocks.json'), 'w', encoding='utf-8') as f:
-        json.dump(bloklar, f, ensure_ascii=False, indent=0)
-
-    print('4/4 EPUB yazılıyor')
-    kapak = os.path.join(calisma, 'cover.png')
-    kapak_kaydet(doc, args.cover_page, kapak)
-    cfg = dict(title=baslik, author=args.author, translator=args.translator, publisher=args.publisher,
-               cover=kapak, out=os.path.abspath(args.output) if args.output else kok + '.epub')
-    if args.config:
-        with open(args.config, encoding='utf-8') as f:
-            cfg.update(json.load(f))
-    out, notlar, bolumler = epub_writer.run(cfg, bloklar)
-    paragraf = sum(1 for b in bloklar if b[0] == 'p')
-    siir = sum(1 for b in bloklar if b[0] == 'verse')
-    print(f'\nTamam: {out}')
-    print(f'  {bolumler} bölüm, {paragraf} paragraf, {siir} şiir bloğu, {notlar} dipnot')
-    basliklar = [b[1] for b in bloklar if b[0] == 'chapter' and len(b) > 1 and b[1]]
-    if basliklar:
-        print('  bölümler: ' + ', '.join(basliklar[:30]) + (' ...' if len(basliklar) > 30 else ''))
-    print(f'  (ara dosyalar: {calisma} — tekrar çalıştırınca OCR baştan yapılmaz)')
+    title = book_title(args, doc, paths['root'])
+    names = image_and_ocr(doc, args, paths, title, tess, tess_args)
+    blocks = build_book_structure(names, paths, tess, tess_args, args, title)
+    write_output(doc, args, paths, title, blocks)
 
 
 if __name__ == '__main__':

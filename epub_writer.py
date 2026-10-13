@@ -1,10 +1,21 @@
 """blocks.json -> EPUB 3 (reflowable, dipnotlu, kapaklı)."""
-import json, re, zipfile, uuid, html, datetime, io
-from PIL import Image
+
+import datetime
+import html
+import importlib
+import io
+import re
+import uuid
+import zipfile
+from collections import Counter
 
 CFG = {}
 TITLE = AUTHOR = TRANSLATOR = PUBLISHER = ''
 CHAPTER_TITLES = ["Birinci Bölüm", "İkinci Bölüm", "Üçüncü Bölüm", "Dördüncü Bölüm", "Beşinci Bölüm"]
+try:
+    UTC = datetime.UTC
+except AttributeError:
+    UTC = datetime.timezone.utc  # noqa: UP017 - Python 3.9 compatibility fallback.
 
 # OCR düzeltmeleri (tam kelime)
 FIXES = {
@@ -106,7 +117,15 @@ aside.footnote, .notes p { font-size: 0.85em; text-indent: 0; margin: 0.4em 0; }
 '''
 
 
-def run(cfg, blocks):
+def load_image(path):
+    try:
+        image_module = importlib.import_module('PIL.Image')
+    except ImportError as exc:
+        raise RuntimeError("Pillow kurulu değil. Şunu çalıştırın: pip install -r requirements.txt") from exc
+    return image_module.open(path)
+
+
+def setup_book(cfg, blocks):
     global CFG, TITLE, AUTHOR, TRANSLATOR, PUBLISHER
     CFG = cfg
     TITLE = cfg.get('title') or 'Kitap'
@@ -115,84 +134,157 @@ def run(cfg, blocks):
     PUBLISHER = cfg.get('publisher', '')
     PROPER.clear()
     alltxt = ' '.join(b[1] for b in blocks if b[0] == 'p')
-    from collections import Counter
     caps = Counter(re.findall(r"(?<=[a-zçğıöşü,;] )([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)", alltxt))
     PROPER.update(w for w, n in caps.items() if n >= 2)
+
+
+def split_chapters(blocks):
     chapters, cur, titles = [], None, []
     for b in blocks:
         if b[0] == 'chapter':
-            cur = []; chapters.append(cur); titles.append(b[1] if len(b) > 1 else None); continue
+            cur = []
+            chapters.append(cur)
+            titles.append(b[1] if len(b) > 1 else None)
+            continue
         if cur is None:
-            cur = []; chapters.append(cur); titles.append(None)
+            cur = []
+            chapters.append(cur)
+            titles.append(None)
         cur.append(b)
+    return chapters, titles
 
+
+def chapter_title(titles, ci):
+    if titles[ci]:
+        return titles[ci]
+    if ci < len(CHAPTER_TITLES):
+        return CHAPTER_TITLES[ci]
+    return f'{ci + 1}. Bölüm'
+
+
+def append_paragraph(parts, pending, text):
+    pieces = MARK.split(esc(fix(text)))
+    out = pieces[0]
+    for p in pieces[1:]:
+        tok = f'@@MARK{len(pending)}@@'
+        pending.append(None)
+        out += tok + p
+    parts.append(f'<p>{out}</p>')
+
+
+def append_verse(parts, block):
+    cls = 'epigraph' if block[2] == 'epigraph' else 'verse'
+    lines = ''.join(f'<p>{esc(fix(line))}</p>' for line in block[1])
+    parts.append(f'<div class="{cls}">{lines}</div>')
+
+
+def append_break(parts):
+    if parts and not parts[-1].startswith('<div class="break"'):
+        parts.append('<div class="break">* * *</div>')
+
+
+def append_note(notes_html, chap_notes, block, note_no):
+    note_no += 1
+    chap_notes.append(note_no)
+    note = esc(fix(block[1]))
+    notes_html.append(
+        f'<aside epub:type="footnote" id="n{note_no}" class="footnote">'
+        f'<p><a href="#r{note_no}">{note_no}.</a> {note}</p></aside>'
+    )
+    return note_no
+
+
+def render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_no):
+    for block in chapter:
+        kind = block[0]
+        if kind == 'p':
+            append_paragraph(parts, pending, block[1])
+        elif kind == 'verse':
+            append_verse(parts, block)
+        elif kind == 'break':
+            append_break(parts)
+        elif kind == 'end':
+            parts.append('<p class="end">SON</p>')
+        elif kind == 'note':
+            note_no = append_note(notes_html, chap_notes, block, note_no)
+    return note_no
+
+
+def replace_note_markers(body, pending, chap_notes, chapter_no):
+    if len(chap_notes) != len(pending):
+        print('UYARI: bölüm', chapter_no, 'işaret', len(pending), 'not', len(chap_notes))
+    for i, n in enumerate(chap_notes[:len(pending)]):
+        pending[i] = n
+    for i, n in enumerate(pending):
+        rep = f'<a epub:type="noteref" class="noteref" id="r{n}" href="#n{n}">{n}</a>' if n else ''
+        body = body.replace(f'@@MARK{i}@@', rep)
+    return body
+
+
+def remove_trailing_breaks(body):
+    while body.count('<div class="break">* * *</div>\n<p class="end">') or body.endswith('<div class="break">* * *</div>'):
+        body = re.sub(r'<div class="break">\* \* \*</div>\n?(<p class="end">|$)', r'\1', body)
+    return body
+
+
+def render_chapter(ci, chapter, title, note_no):
+    parts = [f'<h1 id="b{ci + 1}">{esc(title)}</h1>']
+    pending = []
+    notes_html = []
+    chap_notes = []
+    note_no = render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_no)
+    body = replace_note_markers('\n'.join(parts), pending, chap_notes, ci + 1)
+    body = remove_trailing_breaks(body)
+    if notes_html:
+        body += '\n<section class="notes" epub:type="footnotes">\n' + '\n'.join(notes_html) + '\n</section>'
+    return (f'chapter{ci + 1}.xhtml', title, page_xhtml(title, body)), note_no
+
+
+def render_chapters(chapters, titles):
     note_no = 0
     files = []
-    for ci, ch in enumerate(chapters):
-        fname = f'chapter{ci + 1}.xhtml'
-        title = titles[ci] or (CHAPTER_TITLES[ci] if ci < len(CHAPTER_TITLES) else f'{ci + 1}. Bölüm')
-        parts = [f'<h1 id="b{ci + 1}">{esc(title)}</h1>']
-        pending = []  # (part_index, ) markers waiting for notes
-        notes_html = []
-        chap_notes = []
-        for b in ch:
-            k = b[0]
-            if k == 'p':
-                t = esc(fix(b[1]))
-                pieces = MARK.split(t)
-                out = pieces[0]
-                for p in pieces[1:]:
-                    tok = f'@@MARK{len(pending)}@@'
-                    pending.append(None)
-                    out += tok + p
-                parts.append(f'<p>{out}</p>')
-            elif k == 'verse':
-                cls = 'epigraph' if b[2] == 'epigraph' else 'verse'
-                parts.append(f'<div class="{cls}">' + ''.join(f'<p>{esc(fix(l))}</p>' for l in b[1]) + '</div>')
-            elif k == 'break':
-                if parts and not parts[-1].startswith('<div class="break"'):
-                    parts.append('<div class="break">* * *</div>')
-            elif k == 'end':
-                parts.append('<p class="end">SON</p>')
-            elif k == 'note':
-                note_no += 1
-                chap_notes.append(note_no)
-                notes_html.append(f'<aside epub:type="footnote" id="n{note_no}" class="footnote"><p><a href="#r{note_no}">{note_no}.</a> {esc(fix(b[1]))}</p></aside>')
-        body = '\n'.join(parts)
-        if len(chap_notes) != len(pending):
-            print('UYARI: bölüm', ci + 1, 'işaret', len(pending), 'not', len(chap_notes))
-        for i, n in enumerate(chap_notes[:len(pending)]):
-            pending[i] = n
-        for i, n in enumerate(pending):
-            rep = f'<a epub:type="noteref" class="noteref" id="r{n}" href="#n{n}">{n}</a>' if n else ''
-            body = body.replace(f'@@MARK{i}@@', rep)
-        while body.count('<div class="break">* * *</div>\n<p class="end">') or body.endswith('<div class="break">* * *</div>'):
-            body = re.sub(r'<div class="break">\* \* \*</div>\n?(<p class="end">|$)', r'\1', body)
-        if notes_html:
-            body += '\n<section class="notes" epub:type="footnotes">\n' + '\n'.join(notes_html) + '\n</section>'
-        files.append((fname, title, page_xhtml(title, body)))
+    for ci, chapter in enumerate(chapters):
+        rendered, note_no = render_chapter(ci, chapter, chapter_title(titles, ci), note_no)
+        files.append(rendered)
+    return files, note_no
 
-    # kapak
-    im = Image.open(CFG['cover']).convert('RGB')
+
+def cover_bytes():
+    im = load_image(CFG['cover']).convert('RGB')
     im.thumbnail((1400, 2100))
-    buf = io.BytesIO(); im.save(buf, 'JPEG', quality=85); cover = buf.getvalue()
+    buf = io.BytesIO()
+    im.save(buf, 'JPEG', quality=85)
+    return buf.getvalue()
 
-    uid = 'urn:uuid:' + str(uuid.uuid5(uuid.NAMESPACE_URL, TITLE + AUTHOR))
-    now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    title_page = page_xhtml(TITLE, f'''<div class="title-page"><h1>{esc(TITLE)}</h1>
-<p>{esc(AUTHOR)}</p><p>&#160;</p>''' + (f'<p>Çeviren: {esc(TRANSLATOR)}</p>' if TRANSLATOR else '') + f'''<p>{esc(PUBLISHER)}</p></div>''')
-    cover_page = page_xhtml('Kapak', '<div class="cover"><img src="cover.jpg" alt="Kapak"/></div>', 'cover')
 
-    nav = page_xhtml('İçindekiler', '<nav epub:type="toc" id="toc"><h1>İçindekiler</h1><ol>' +
-                     ''.join(f'<li><a href="{f}">{esc(t)}</a></li>' for f, t, _ in files) + '</ol></nav>' +
-                     '<nav epub:type="landmarks" hidden=""><ol><li><a epub:type="cover" href="cover.xhtml">Kapak</a></li>'
-                     f'<li><a epub:type="bodymatter" href="{files[0][0]}">Metin</a></li></ol></nav>')
-    ncx = f'''<?xml version="1.0" encoding="utf-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="{uid}"/></head>
-<docTitle><text>{esc(TITLE)}</text></docTitle><navMap>''' + ''.join(
+def build_title_page():
+    translator = f'<p>Çeviren: {esc(TRANSLATOR)}</p>' if TRANSLATOR else ''
+    return page_xhtml(TITLE, f'''<div class="title-page"><h1>{esc(TITLE)}</h1>
+<p>{esc(AUTHOR)}</p><p>&#160;</p>{translator}<p>{esc(PUBLISHER)}</p></div>''')
+
+
+def build_cover_page():
+    return page_xhtml('Kapak', '<div class="cover"><img src="cover.jpg" alt="Kapak"/></div>', 'cover')
+
+
+def build_nav(files):
+    return page_xhtml('İçindekiler', '<nav epub:type="toc" id="toc"><h1>İçindekiler</h1><ol>' +
+                      ''.join(f'<li><a href="{f}">{esc(t)}</a></li>' for f, t, _ in files) + '</ol></nav>' +
+                      '<nav epub:type="landmarks" hidden=""><ol><li><a epub:type="cover" href="cover.xhtml">Kapak</a></li>'
+                      f'<li><a epub:type="bodymatter" href="{files[0][0]}">Metin</a></li></ol></nav>')
+
+
+def build_ncx(uid, files):
+    nav_points = ''.join(
         f'<navPoint id="np{i}" playOrder="{i + 1}"><navLabel><text>{esc(t)}</text></navLabel><content src="{f}"/></navPoint>'
-        for i, (f, t, _) in enumerate(files)) + '</navMap></ncx>'
+        for i, (f, t, _) in enumerate(files)
+    )
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="{uid}"/></head>
+<docTitle><text>{esc(TITLE)}</text></docTitle><navMap>{nav_points}</navMap></ncx>'''
 
+
+def build_manifest_and_spine(files):
     manifest = ['<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
                 '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
                 '<item id="css" href="style.css" media-type="text/css"/>',
@@ -200,12 +292,16 @@ def run(cfg, blocks):
                 '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>',
                 '<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>']
     spine = ['<itemref idref="cover" linear="yes"/>', '<itemref idref="title"/>']
-    for i, (f, t, _) in enumerate(files):
+    for i, (f, _, _) in enumerate(files):
         manifest.append(f'<item id="c{i + 1}" href="{f}" media-type="application/xhtml+xml"/>')
         spine.append(f'<itemref idref="c{i + 1}"/>')
+    return manifest, spine
+
+
+def build_opf(uid, now, manifest, spine):
     trl = (f'<dc:contributor id="trl">{esc(TRANSLATOR)}</dc:contributor>\n'
            f'<meta refines="#trl" property="role" scheme="marc:relators">trl</meta>\n') if TRANSLATOR else ''
-    opf = f'''<?xml version="1.0" encoding="utf-8"?>
+    return f'''<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="tr">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
 <dc:identifier id="uid">{uid}</dc:identifier>
@@ -220,21 +316,49 @@ def run(cfg, blocks):
 <manifest>{''.join(manifest)}</manifest>
 <spine toc="ncx">{''.join(spine)}</spine>
 </package>'''
-    container = '''<?xml version="1.0" encoding="utf-8"?>
+
+
+def build_container():
+    return '''<?xml version="1.0" encoding="utf-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
 <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'''
 
-    out = CFG.get('out', 'kitap.epub')
+
+def write_epub(out, files, content):
     with zipfile.ZipFile(out, 'w') as z:
         z.writestr(zipfile.ZipInfo('mimetype'), 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
-        z.writestr('META-INF/container.xml', container, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/content.opf', opf, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/nav.xhtml', nav, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/toc.ncx', ncx, zipfile.ZIP_DEFLATED)
+        z.writestr('META-INF/container.xml', content['container'], zipfile.ZIP_DEFLATED)
+        z.writestr('OEBPS/content.opf', content['opf'], zipfile.ZIP_DEFLATED)
+        z.writestr('OEBPS/nav.xhtml', content['nav'], zipfile.ZIP_DEFLATED)
+        z.writestr('OEBPS/toc.ncx', content['ncx'], zipfile.ZIP_DEFLATED)
         z.writestr('OEBPS/style.css', CSS, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/cover.jpg', cover, zipfile.ZIP_STORED)
-        z.writestr('OEBPS/cover.xhtml', cover_page, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/title.xhtml', title_page, zipfile.ZIP_DEFLATED)
-        for f, t, x in files:
+        z.writestr('OEBPS/cover.jpg', content['cover'], zipfile.ZIP_STORED)
+        z.writestr('OEBPS/cover.xhtml', content['cover_page'], zipfile.ZIP_DEFLATED)
+        z.writestr('OEBPS/title.xhtml', content['title_page'], zipfile.ZIP_DEFLATED)
+        for f, _, x in files:
             z.writestr('OEBPS/' + f, x, zipfile.ZIP_DEFLATED)
+
+
+def build_epub_content(files):
+    uid = 'urn:uuid:' + str(uuid.uuid5(uuid.NAMESPACE_URL, TITLE + AUTHOR))
+    now = datetime.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+    manifest, spine = build_manifest_and_spine(files)
+    return {
+        'container': build_container(),
+        'opf': build_opf(uid, now, manifest, spine),
+        'nav': build_nav(files),
+        'ncx': build_ncx(uid, files),
+        'cover': cover_bytes(),
+        'cover_page': build_cover_page(),
+        'title_page': build_title_page(),
+    }
+
+
+def run(cfg, blocks):
+    setup_book(cfg, blocks)
+    chapters, titles = split_chapters(blocks)
+    files, note_no = render_chapters(chapters, titles)
+    content = build_epub_content(files)
+    out = CFG.get('out', 'kitap.epub')
+    write_epub(out, files, content)
     return out, note_no, len(files)
