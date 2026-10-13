@@ -1,0 +1,9 @@
+{
+  "fixes": {
+    "San-Özek": "Sarı-Özek",
+    "böyie": "böyle"
+  },
+  "regex_fixes": [
+    ["\\bSa[nr]ı?\\s*-\\s*Özek", "Sarı-Özek"]
+  ]
+}
