@@ -10,6 +10,7 @@ import statistics as st
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from typing import Any, TypeVar
 
@@ -17,15 +18,25 @@ T = TypeVar('T')
 np: Any = importlib.import_module('numpy')
 Image: Any = importlib.import_module('PIL.Image')
 
-FN_START = re.compile(r'^\W{0,3}(\(\s*[*9©]\s*[)Y]|©\)|\(\*|\*)\s*')
-MARK = re.compile(r"\(\s*\*\s*[)Y]?")
+FOOTNOTE_PREFIX_PATTERNS = (
+    re.compile(r'^\W{0,3}\(\s*[*9©]\s*[)Y]\s*'),
+    re.compile(r'^\W{0,3}©\)\s*'),
+    re.compile(r'^\W{0,3}\(\*\s*'),
+    re.compile(r'^\W{0,3}\*\s*'),
+    re.compile(r'^[\s|]*(?:\*{1,3}|†{1,2})\s*'),
+)
+MARK = re.compile(r"\(\s*\*\s*[)Y]?|(?<=[\w.,;:!?'’\"”)])(\*{1,3}|†{1,2})")
+NOTE_ID = [0]
 HEADER = re.compile(r"(\d+\s*$|^\d+\s*/)")
 IMG_DIR = 'desk'
 TESSERACT = 'tesseract'
 TESSERACT_ARGS = []
 LANG = 'tur'
 VERBOSE = False
-REFERENCE_LINES = {}
+REFERENCE = {}
+REF_MAX_CONF = 80
+VOCAB = {}
+REF_ODD_APOSTROPHE_SUFFIX = re.compile(r"['’][a-zçğıöşü]*(?:m|rn|nm)$")
 NON_LETTER = r"[^A-Za-zÇĞİÖŞÜçğıöşü_]"
 PAGE_NUM = re.compile(rf"{NON_LETTER}{{0,2}}[0-9]{{1,4}}{NON_LETTER}{{0,2}}")
 END_PUNCT = tuple('.!?:…"”\'»')
@@ -35,12 +46,11 @@ JUNK_TOKEN_CHARS = set('|İ![]{}')
 BAD_GAP_CHARS = set('<>»«|—')
 GAP_TRAILING_CHARS = set('.,!?;:"\'')
 ODD_APOSTROPHE_SUFFIX = re.compile(r"\b[^\W\d_]+['’][bcçdfgğhjklmnprsştvyz]{3,}\b", re.IGNORECASE)
-SUSPICIOUS_TEXT_LAYER_WORD = re.compile(
-    r"\b[^\W\d_]*(?:oı|ie|lcr|rnı|ıı|umı|tcı|teı|kcn|ktc|dck|eiy|vann|eeli|dalzi|"
-    r"lc\b|lc(?=[^aeıioöuü])|lci|tck|nıa|dc\b|dc(?=[^aeıioöuü])|ysc\b|okyar|"
-    r"sorn|yanıyar|pcn|ınaj|kraliyer|gcl|huyur|görscl|güvcrt|karavc|kümcs|"
-    r"beccr|cialm|kişncy|elelen|lerele|geele|tavt)[^\W\d_]*\b",
-    re.IGNORECASE,
+SUSPICIOUS_TEXT_FRAGMENTS = (
+    'oı', 'ie', 'lcr', 'rnı', 'ıı', 'umı', 'tcı', 'teı', 'kcn', 'ktc', 'dck', 'eiy',
+    'vann', 'eeli', 'dalzi', 'lci', 'tck', 'nıa', 'ysc', 'okyar', 'sorn', 'yanıyar',
+    'pcn', 'ınaj', 'kraliyer', 'gcl', 'huyur', 'görscl', 'güvcrt', 'karavc', 'kümcs',
+    'beccr', 'cialm', 'kişncy', 'elelen', 'lerele', 'geele', 'tavt',
 )
 
 
@@ -108,10 +118,29 @@ def norm_match_text(t):
     return re.sub(r"[^0-9a-zçğıöşü]+", "", t)
 
 
+def norm_word(word):
+    return re.sub(r"[^0-9a-zçğıöşüâîû]", "", tr_lower(word))
+
+
 def clean_reference_line(t):
     t = t.replace('\xad', '-')
     t = re.sub(r'\s+', ' ', t)
     return t.strip()
+
+
+def text_words(t):
+    return re.findall(r"[^\W\d_]+", tr_lower(t))
+
+
+def suspicious_text_layer_word_count(t):
+    count = 0
+    for word in text_words(t):
+        has_fragment = any(fragment in word for fragment in SUSPICIOUS_TEXT_FRAGMENTS)
+        has_bad_lc = word.endswith('lc') or ('lc' in word and re.search(r'lc(?=[^aeıioöuü])', word))
+        has_bad_dc = word.endswith('dc') or ('dc' in word and re.search(r'dc(?=[^aeıioöuü])', word))
+        if has_fragment or has_bad_lc or has_bad_dc:
+            count += 1
+    return count
 
 
 def text_badness(t):
@@ -119,55 +148,102 @@ def text_badness(t):
     score += 3 * len(re.findall(r"[#|�]", t))
     score += 3 * len(re.findall(r"[^\W\d_]+\d+[^\W\d_]+", t))
     score += 4 * len(ODD_APOSTROPHE_SUFFIX.findall(tr_lower(t)))
-    score += 3 * len(SUSPICIOUS_TEXT_LAYER_WORD.findall(tr_lower(t)))
+    score += 3 * suspicious_text_layer_word_count(t)
     score += 2 * len(re.findall(r"\b\w+\?+\w+\b", t))
     score += abs(t.count('[') - t.count(']'))
     score += abs(t.count('(') - t.count(')'))
     return score
 
 
-def reference_is_safer(ocr_text, ref_text):
-    if ODD_APOSTROPHE_SUFFIX.search(tr_lower(ref_text)) and not ODD_APOSTROPHE_SUFFIX.search(tr_lower(ocr_text)):
+def build_vocab(files):
+    counts = {}
+    for f in files:
+        for line in read_lines(f):
+            for word in line['words']:
+                if word['c'] >= 90:
+                    normalized = norm_word(word['t'])
+                    if len(normalized) >= 2:
+                        counts[normalized] = counts.get(normalized, 0) + 1
+    return counts
+
+
+def reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
+    if not reference_word_is_similar_enough(ocr_word, ocr_norm, ref_norm):
         return False
-    return text_badness(ref_text) <= text_badness(ocr_text) + 1
+    ocr_known = VOCAB.get(ocr_norm, 0) >= 3
+    ref_known = VOCAB.get(ref_norm, 0) >= 2
+    if ocr_known and not ref_known:
+        return False
+    return not (reference_word_is_suspect(ref_word) and not ref_known)
 
 
-def best_reference_match(text, ref_lines, start):
-    needle = norm_match_text(text)
-    if len(needle) < 8:
-        return None, start
-    end = min(len(ref_lines), start + 8)
-    begin = max(0, start - 2)
-    best = (0.0, None, start)
-    for index in range(begin, end):
-        ref = ref_lines[index]
-        hay = norm_match_text(ref)
-        if len(hay) < 8:
-            continue
-        ratio = difflib.SequenceMatcher(None, needle, hay).ratio()
-        length_ratio = min(len(needle), len(hay)) / max(len(needle), len(hay))
-        score = ratio * length_ratio
-        if score > best[0]:
-            best = (score, ref, index)
-    if best[0] >= 0.72 and reference_is_safer(text, best[1]):
-        return best[1], best[2] + 1
-    return None, start
+def reference_word_is_similar_enough(ocr_word, ocr_norm, ref_norm):
+    if not (ocr_word['c'] < REF_MAX_CONF and ocr_norm and ref_norm):
+        return False
+    if difflib.SequenceMatcher(None, ocr_norm, ref_norm).ratio() < 0.5:
+        return False
+    return not (re.search(r'\d', ocr_norm) and re.search(r'\d', ref_norm))
+
+
+def reference_word_is_suspect(ref_word):
+    lowered = tr_lower(ref_word)
+    if 'vv' in lowered or any(ch in ref_word for ch in '/|#\\'):
+        return True
+    if re.search(r'\d[^\W\d_]|[^\W\d_]\d', ref_word):
+        return True
+    if any(a.islower() and b.isupper() for a, b in successive_pairs(ref_word)):
+        return True
+    return bool(REF_ODD_APOSTROPHE_SUFFIX.search(lowered))
+
+
+def apply_reference_word(ocr_word, ref_word, ocr_norm, ref_norm):
+    if reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
+        ocr_word['t'] = ref_word
+        ocr_word['c'] = max(ocr_word['c'], 60.0)
+
+
+def apply_reference_footnote_marker(ocr_word, ref_word):
+    marker = re.search(r'(\*{1,3})[.,;:!?)]*$', ref_word)
+    if marker and '*' not in ocr_word['t'] and ocr_word['c'] < 95:
+        ocr_word['t'] = re.sub(r'["”“\'’]?([.,;:!?)]*)$', marker.group(1) + r'\1', ocr_word['t'], count=1)
 
 
 def apply_reference_text(lines, page_name):
-    ref_lines = REFERENCE_LINES.get(os.path.basename(page_name), [])
-    if ref_lines:
-        ref_index = 0
-        previous_text = ''
-        for line in lines:
-            if line['kind'] not in {'text', 'break'}:
-                previous_text = line.get('t', '')
-                continue
-            ref, ref_index = best_reference_match(line['t'], ref_lines, ref_index)
-            if ref and not hyphen_continuation_conflicts(previous_text, line['t'], ref):
-                line['t'] = ref
-            previous_text = line['t']
+    ref = REFERENCE.get(os.path.basename(page_name)[:-4])
+    if not ref:
+        return lines
+    words = [word for line in lines for word in line['words']]
+    ocr_norms = [norm_word(word['t']) for word in words]
+    ref_norms = [norm_word(text) for text in ref]
+    matcher = difflib.SequenceMatcher(None, ocr_norms, ref_norms, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            for offset in range(i2 - i1):
+                apply_reference_footnote_marker(words[i1 + offset], ref[j1 + offset])
+        elif tag == 'replace' and i2 - i1 == j2 - j1:
+            for offset in range(i2 - i1):
+                apply_reference_word(
+                    words[i1 + offset],
+                    ref[j1 + offset],
+                    ocr_norms[i1 + offset],
+                    ref_norms[j1 + offset],
+                )
+    for line in lines:
+        finalize(line, line['words'])
     return lines
+
+
+def footnote_prefix_match(text):
+    for pattern in FOOTNOTE_PREFIX_PATTERNS:
+        match = pattern.match(text)
+        if match:
+            return match
+    return None
+
+
+def strip_footnote_prefix(text):
+    match = footnote_prefix_match(text)
+    return text[match.end():] if match else text
 
 
 def first_word(text):
@@ -192,11 +268,15 @@ def detect_headers(files):
             t = norm_hdr(' '.join(w['t'] for w in d['words']))
             if 4 <= len(t) <= 60:
                 tops.append(t)
+    counts = Counter(tops)
+    unique = sorted(counts, key=lambda item: -counts[item])
     found = []
-    for t in tops:
+    for t in unique:
         if any(difflib.SequenceMatcher(None, t, h).ratio() > 0.75 for h in found):
             continue
-        n = sum(difflib.SequenceMatcher(None, t, u).ratio() > 0.75 for u in tops)
+        if counts[t] < 2:
+            break
+        n = sum(counts[u] for u in unique if difflib.SequenceMatcher(None, t, u).ratio() > 0.75)
         if n >= max(5, 0.15 * len(files)):
             found.append(t)
     return found
@@ -237,24 +317,58 @@ def drop_running_headers(lines, page_h):
     return lines
 
 
-def detect_top_title(lines, page_h, W):
-    title = None
-    if len(lines) <= 1:
-        return title, lines
-    sp0 = [b['y'] - a['y'] for a, b in successive_pairs(lines[1:])]
-    lsp = st.median(sp0) if sp0 else 60
-    if lines[0]['y'] >= page_h * 0.18 or lines[1]['y'] - lines[0]['y'] <= 2 * lsp:
-        return title, lines
+def line_spacing_after_first(lines):
+    spacings = [b['y'] - a['y'] for a, b in successive_pairs(lines[1:])]
+    return st.median(spacings) if spacings else 60
 
-    # Üstte tek başına satır: ya üst bilgi ya da ortalanmışsa bölüm başlığı.
+
+def body_bounds_for_title(lines, W):
     xs_ = sorted(d['x'] for d in lines[1:] if d['x'] > 8)
     rs_ = sorted(d['r'] for d in lines[1:])
     body_x = xs_[len(xs_) // 10] if xs_ else 0
     body_r = rs_[int(len(rs_) * 0.9)] if rs_ else W
-    l0 = lines[0]
-    centered = abs((l0['x'] - body_x) - (body_r - l0['r'])) < 0.12 * (body_r - body_x) and l0['x'] - body_x > 60
-    if centered and lines[1]['y'] - lines[0]['y'] > 3.5 * lsp and not HEADER.search(l0['t']):
-        title = l0['t']
+    return body_x, body_r
+
+
+def centered_title_line(line, body_x, body_r):
+    return abs((line['x'] - body_x) - (body_r - line['r'])) < 0.12 * (body_r - body_x) and line['x'] - body_x > 60
+
+
+def valid_chapter_title(text):
+    stripped = text.strip()
+    return letters(text) >= 2 or re.fullmatch(r'\d{1,4}\.?|[IVXLC]{1,6}\.?', stripped)
+
+
+def centered_top_title(lines, W):
+    body_x, body_r = body_bounds_for_title(lines, W)
+    return centered_title_line(lines[0], body_x, body_r)
+
+
+def is_mid_page_title_candidate(lines, page_h, line_gap, spacing):
+    first = lines[0]
+    return (
+        len(lines) > 2
+        and page_h * 0.18 <= first['y'] < page_h * 0.6
+        and line_gap > 2.5 * spacing
+    )
+
+
+def is_valid_top_title(lines, W):
+    first = lines[0]
+    return centered_top_title(lines, W) and valid_chapter_title(first['t']) and len(first['t']) < 60 and not is_header(first['t'])
+
+
+def detect_top_title(lines, page_h, W):
+    if len(lines) <= 1:
+        return None, lines
+    line_gap = lines[1]['y'] - lines[0]['y']
+    spacing = line_spacing_after_first(lines)
+    first = lines[0]
+    if is_mid_page_title_candidate(lines, page_h, line_gap, spacing) and is_valid_top_title(lines, W):
+        return first['t'], lines[1:]
+    if first['y'] >= page_h * 0.18 or line_gap <= 2 * spacing:
+        return None, lines
+    title = first['t'] if centered_top_title(lines, W) and line_gap > 3.5 * spacing and not HEADER.search(first['t']) else None
     return title, lines[1:]
 
 
@@ -358,17 +472,40 @@ def split_footnotes(lines, page_h, H):
     notes, body = [], []
     in_fn = False
     for d in lines:
-        note_start = d['kind'] == 'text' and d['y'] > page_h * 0.45 and FN_START.match(d['t'])
+        note_start = d['kind'] == 'text' and d['y'] > page_h * 0.45 and footnote_prefix_match(d['t'])
         if not in_fn and note_start and (d['h'] < H * 0.9 or d['t'].lstrip().startswith(('(', '©'))):
             in_fn = True
         if in_fn:
-            if FN_START.match(d['t']):
-                notes.append([FN_START.sub('', d['t'])])
+            if footnote_prefix_match(d['t']):
+                notes.append([strip_footnote_prefix(d['t'])])
             elif notes:
                 notes[-1].append(d['t'])
         else:
             body.append(d)
     return [join_lines(n) for n in notes], body
+
+
+def bind_footnotes(notes, body):
+    note_ids = []
+    for _ in notes:
+        NOTE_ID[0] += 1
+        note_ids.append(NOTE_ID[0])
+
+    marker_index = 0
+    for line in body:
+        if line['kind'] != 'text' or not MARK.search(line['t']):
+            continue
+
+        def replace_marker(_match):
+            nonlocal marker_index
+            if marker_index < len(note_ids):
+                note_id = note_ids[marker_index]
+                marker_index += 1
+                return f'⟦{note_id}⟧'
+            return ''
+
+        line['t'] = MARK.sub(replace_marker, line['t'])
+    return list(zip(note_ids, notes))
 
 
 def add_body_metrics(body, B, R):
@@ -380,6 +517,23 @@ def add_body_metrics(body, B, R):
         d['rel'] = d['x'] - B
         d['short'] = d['r'] < R - 110
         d['width'] = R - B
+
+
+def mark_date_lines(body, B, R):
+    for i, d in enumerate(body):
+        if not (
+            d['kind'] == 'text'
+            and d['x'] - B > 0.2 * (R - B)
+            and abs(d['r'] - R) < 45
+            and len(d['t']) < 60
+            and not re.search(r'\w-$', d['t'])
+        ):
+            continue
+        before_ok = i == 0 or d['gap']
+        next_line = body[i + 1] if i + 1 < len(body) else None
+        after_ok = next_line is None or next_line['gap'] or next_line['rel'] < 0.15 * (R - B)
+        if before_ok and after_ok:
+            d['kind'] = 'date'
 
 
 def page(f):
@@ -394,13 +548,15 @@ def page(f):
     if not lines:
         return None
     R, B = cluster_text_bounds(lines, *estimate_text_bounds(lines))
+    apply_reference_text(lines, f)
     lines = clean_ocr_lines(lines, B, R)
     hs = [d['h'] for d in lines if d['kind'] == 'text']
     H = st.median(hs) if hs else 60
     notes, body = split_footnotes(lines, page_h, H)
-    body = apply_reference_text(body, f)
+    notes = bind_footnotes(notes, body)
     body = recover_gaps(f, body, B, R)
     add_body_metrics(body, B, R)
+    mark_date_lines(body, B, R)
     first_y = body[0]['y'] if body else 0
     return {'name': f, 'body': body, 'notes': notes, 'R': R, 'B': B, 'first_y': first_y, 'title': title, 'page_h': page_h}
 
@@ -509,7 +665,15 @@ def recover_gap_lines(prev, cur, B, R, img):
     box = gap_box(prev, cur, B, R)
     if not box_is_tall_enough(box):
         return []
-    tsv = run_gap_ocr(img.crop(box))
+    crop = img.crop(box)
+    ink = (np.array(crop.convert('L')) < 128).mean(1) > 0.004
+    run = best_run = 0
+    for value in ink:
+        run = run + 1 if value else 0
+        best_run = max(best_run, run)
+    if best_run < 0.4 * prev['h']:
+        return []
+    tsv = run_gap_ocr(crop)
     candidates = candidate_gap_lines(group_tsv_words(tsv), prev)
     return [line for line in (make_recovered_line(c, prev, cur, B, R, img, box) for c in candidates) if line]
 
@@ -636,8 +800,8 @@ def build_items(pages):
         else:
             for i, d in enumerate(pg['body']):
                 items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
-        for n in pg['notes']:
-            items.append({'kind': 'note', 't': clean_text(n)})
+        for note_id, note in pg['notes']:
+            items.append({'kind': 'note', 't': clean_text(note), 'id': note_id})
     return items
 
 
@@ -853,10 +1017,18 @@ class BlockBuilder:
         self.in_epigraph = True
         self.prev = None
 
-    def add_note(self, text):
+    def add_note(self, text, note_id=None):
         self.flush()
         self.flush_verse(self.verse_class())
-        self.blocks.append(('note', text))
+        self.blocks.append(('note', text, note_id))
+        self.prev = None
+
+    def add_date(self, text):
+        self.flush()
+        self.flush_verse('verse')
+        if self.blocks and self.blocks[-1][0] == 'break':
+            self.blocks.pop()
+        self.blocks.append(('date', clean_text(text)))
         self.prev = None
 
     def add_definition_list(self, rows):
@@ -962,7 +1134,9 @@ class BlockBuilder:
         if kind == 'chapter':
             self.start_chapter(item.get('title'))
         elif kind == 'note':
-            self.add_note(item['t'])
+            self.add_note(item['t'], item.get('id'))
+        elif kind == 'date':
+            self.add_date(item['t'])
         elif kind == 'deflist':
             self.add_definition_list(item['rows'])
         elif kind == 'break':

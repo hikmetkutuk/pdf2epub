@@ -11,6 +11,7 @@ from collections import Counter
 
 CFG = {}
 TITLE = AUTHOR = TRANSLATOR = PUBLISHER = ''
+OEBPS_DIR = 'OEBPS/'
 LETTER_OR_APOSTROPHE = r"(?:[^\W\d_]|')"
 try:
     UTC = datetime.UTC
@@ -32,33 +33,10 @@ FIXES = {
     'adamun': 'adamın', 'bulamiyordu': 'bulamıyordu', 's0luk': 'soluk', 'zözden': 'gözden', 'kaçmal': 'kaçmak',
     'meslekdasları': 'meslekdaşları', 
     'savaşlan': 'savaştan', 'yâpacağı': 'yapacağı', 'unutut': 'unutur', 'boişevik': 'bolşevik', 'çocugu': 'çocuğu', 'çocuklan': 'çocuklar',
-    'Değnegil': 'Değneği]',
-    'Lewestten': "Lewes'ten", 'Nighis': 'Nights', 'Fowr': 'Four', 'Lightbonse': 'Lighthouse',
-    'Dorrir': 'Dorrit', 'Anfi': 'Ant',
-    'bilecegim': 'bileceğim', 'guruidaya': 'guruldaya', 'düşüneeli': 'düşünceli',
-    'gelmektc': 'gelmekte', 'beklemcktcymiş': 'beklemekteymiş',
-    'islimlc': 'islimle', 'okyarrusları': 'okyanusları', 'okyaruslardan': 'okyanuslardan',
-    'tck': 'tek', 'tckneyi': 'tekneyi', 'tcknelerin': 'teknelerin', 'tckneye': 'tekneye',
-    'ıçın': 'için', 'kaldırınış': 'kaldırmış', 'içindeysc': 'içindeyse', 'beklcmeye': 'beklemeye',
-    'kalnıadığını': 'kalmadığını', 'dcnizlerin': 'denizlerin', 'emrimdc': 'emrimde',
-    'deniLcilerimle': 'denizcilerimle', 'karşma': 'karşına', 'sornun': 'somun',
-    'yanıyarmuş': 'yanıyormuş', 'denizlerele': 'denizlerde', 'gölgeele': 'gölgede',
-    'tavtıklar': 'tavuklar', 'nıartılara': 'martılara', 'ranıasında': 'ranzasında',
-    'pcncerelere': 'pencerelere', 'ınajesteleri': 'majesteleri', 'iskeleelen': 'iskeleden',
     'Diger': 'Diğer', 'diger': 'diğer', 'degildir': 'değildir', 'degilmiş': 'değilmiş',
-    'degiştirmiş': 'değiştirmiş', 'gclmezmiş': 'gelmezmiş', 'güvcrte': 'güverte',
-    'karavcla': 'karavela', 'karavclaya': 'karavelaya', 'karavcianın': 'karavelanın',
-    'kümcs': 'kümes', 'beccrebileceği': 'becerebileceği', 'huyuracak': 'buyuracak',
-    'görscler': 'görseler', 'kişncyen': 'kişneyen', 'cialmadıgını': 'dalmadığını',
-    'kraliyerteki': 'krallıktaki', 'mürettcbatın': 'mürettebatın', 'biimiş': 'bilmiş',
-    'kurtutmayı': 'kurtulmayı', 'arsuladıklarından': 'arzuladıklarından',
+    'degiştirmiş': 'değiştirmiş', 'bilecegim': 'bileceğim', 'oldugundan': 'olduğundan',
     'dalmadıgını': 'dalmadığını', 'bulamadıgını': 'bulamadığını', 'aldıgındaysa': 'aldığındaysa',
-    'oldugundan': 'olduğundan', 'hattaniyesini': 'battaniyesini', 'beklerneye': 'beklemeye',
-    'veriyorınuş': 'veriyormuş', 'yarnar': 'yamar', 'çmaplanndaki': 'çoraplarındaki',
-    'Arnbarın': 'Ambarın', 'niyetİnı': 'niyetim', 'Sintİneye': 'Sintineye',
-    'ınalını': 'malım', 'Adaının': 'Adamın', 'anlatının': 'anlatırım',
-    'bilimneye': 'bilinmeye', 'çığlıkianna': 'çığlıklarına', 'sohpetlerini': 'sohbetlerini',
-    'yanlannda': 'yanlarında', 'kollannın': 'kollarının',
+    'ıçın': 'için', 'Tbe': 'The', 'tbe': 'the',
 }
 REGEX_FIXES = [
 
@@ -67,20 +45,7 @@ REGEX_FIXES = [
     (r"\.\.\s*\.", "..."),
     (r"\$", "ş"),
     (r"\b([0-9]{1,2}) Mar[iı](?=,?\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\b)", r"\1 Mart"),
-    (r"\bElekt\?ra's[ıi]m\b", "Elektra'sını"),
-    (r"\bStandar\?ta\b", "Standard'ta"),
     (r"(?<=\w)\?(?=(?:i|ı|in|ın|un|ün|yle|de|da|te|ta)\b)", "'"),
-    (r"\bKayıp Cennetl\b", "Kayıp Cennet]"),
-    (r'\bAnny Hala["”]', "Anny Hala*"),
-    (r"\bBliss Mutluluk\|", "Bliss [Katıksız Mutluluk]"),
-    (r"\bAaron'ın Değneği\]", "Aaron'ın Değneği]"),
-    (r"\bJ\|\.T Stephen\b", "J. T. Stephen"),
-    (r"\bPYıllar\|", "[Yıllar]"),
-    (r"\bH\. \|\.", "H. J."),
-    (r"\|\. Sally", "Sally"),
-    (r"\bLefter #o a Young Poef'in\b", "Letter to a Young Poet'in"),
-    (r"\bMektupj\b", "Mektup]"),
-    (r"\bV\.?\s*Wnin\b", "V. W.'nin"),
     (r"\bTbe\b", "The"),
     (r"\btbe\b", "the"),
     (r"\bibe\b", "the"),
@@ -89,20 +54,12 @@ REGEX_FIXES = [
     (r"(?<!\w)#he\b", "the"),
     (r"\b191#te\b", "1914'te"),
     (r"(?<!\w)#ünde\b", "4'ünde"),
-    (r"\bDorrir(?=')", "Dorrit"),
-    (r"\bguru\Sdaya\b", "guruldaya"),
-    (r"\bgöremen[ı1]iş\b", "görememiş"),
-    (r"\bC\)11U\b", "onu"),
-    (r"\btarafı+[ı1]dalzi\b", "tarafındaki"),
-    (r"\bhaL[1i]\b", "hâlâ"),
-    (r"\bct[·.]+", "et"),
-    (r"\blıL[·.]Iasırıdan\b", "sıkıntısından"),
-    (r"\bdav[.·]?ınışına\b", "davranışına"),
-    (r"\branzasında yararken\b", "ranzasında yatarken"),
-    (r"(?<=\w)\"(?=(?:de|da|den|dan|nin|ın|in|un|ün|ye|ya|yle|te|ta|ten|tan)\b)", "'"),
     (r"(\w) (ğ\w)", r"\1\2"), (r"\bdogup\b", "doğup"),
 ]
-MARK = re.compile(r"\(\s*\*\s*[\)Y]|(?<=\w)\*")
+OLD_MARK = re.compile(r"\(\s*\*\s*[\)Y]")
+TOKEN = re.compile(r"⟦(\d+)⟧")
+QUOTE_SUFFIX = re.compile(r'(?<=[^\W\d_])["”](?=[^\W\d_]+\b)')
+APOSTROPHE_SUFFIXES = ('de', 'da', 'den', 'dan', 'nin', 'ın', 'in', 'un', 'ün', 'ye', 'ya', 'yle', 'te', 'ta', 'ten', 'tan')
 
 
 PROPER = set()
@@ -133,6 +90,41 @@ def fix_translation_brackets(s):
     return s
 
 
+def quote_as_apostrophe(s):
+    """Kesme işareti yerine okunmuş tırnakları düzelt; kapanan alıntı tırnaklarını koru."""
+    out, last = [], 0
+    for match in QUOTE_SUFFIX.finditer(s):
+        if not quote_has_apostrophe_suffix(s, match.end()):
+            continue
+        open_quote = is_closing_quote(s[:match.start()])
+        out.append(s[last:match.start()])
+        out.append(match.group(0) if open_quote else "'")
+        last = match.end()
+    out.append(s[last:])
+    return ''.join(out)
+
+
+def quote_has_apostrophe_suffix(text, start):
+    match = re.match(r"[^\W\d_]+", text[start:])
+    return bool(match and match.group(0) in APOSTROPHE_SUFFIXES)
+
+
+def is_closing_quote(before):
+    return has_unclosed_quote(before) or quote_opens_current_word(before)
+
+
+def has_unclosed_quote(text):
+    return (text.count('"') + text.count('“') - text.count('”')) % 2 == 1
+
+
+def quote_opens_current_word(text):
+    match = re.search(r"[^\W\d_]*$", text)
+    if not match:
+        return False
+    word_start = len(text.rstrip()) - len(match.group(0))
+    return word_start > 0 and text[word_start - 1] in '"“'
+
+
 def fix(s):
     for a, b in CFG.get('regex_fixes', []):
         s = re.sub(a, b, s)
@@ -149,6 +141,7 @@ def fix(s):
     s = re.sub(rf"{LETTER_OR_APOSTROPHE}+", rep, s)
     for a, b in REGEX_FIXES:
         s = re.sub(a, b, s)
+    s = quote_as_apostrophe(s)
     s = fix_translation_brackets(s)
     return s
 
@@ -171,6 +164,8 @@ CSS = '''
 body { margin: 0 4%; font-family: serif; line-height: 1.45; }
 h1 { font-size: 1.4em; text-align: center; margin: 3em 0 1.5em; font-weight: normal; letter-spacing: 0.08em; }
 p { margin: 0; text-indent: 1.5em; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+p.date { text-align: right; text-indent: 0; font-style: italic; margin: 1.6em 0 0.6em; }
+p.date + p { text-indent: 0; }
 p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
 .break { text-align: center; margin: 1.2em 0; text-indent: 0; letter-spacing: 0.5em; }
 .verse { margin: 0.9em 0 0.9em 2em; font-style: italic; }
@@ -239,19 +234,25 @@ def fallback_chapter_label(chapter, ci):
     return f'Metin {ci + 1}'
 
 
-def append_paragraph(parts, pending, text):
-    pieces = MARK.split(esc(fix(text)))
-    out = pieces[0]
-    for p in pieces[1:]:
-        tok = f'@@MARK{len(pending)}@@'
-        pending.append(None)
-        out += tok + p
-    parts.append(f'<p>{out}</p>')
+def note_linker(note_numbers):
+    def link(match):
+        note_id = int(match.group(1))
+        if note_id not in note_numbers:
+            return ''
+        number = note_numbers[note_id]
+        return f'<a epub:type="noteref" class="noteref" id="r{note_id}" href="#n{note_id}">{number}</a>'
+    return link
 
 
-def append_verse(parts, block):
+def append_paragraph(parts, text, note_numbers):
+    text = esc(fix(OLD_MARK.sub('', text)))
+    parts.append('<p>' + TOKEN.sub(note_linker(note_numbers), text) + '</p>')
+
+
+def append_verse(parts, block, note_numbers):
     cls = 'epigraph' if block[2] == 'epigraph' else 'verse'
-    lines = ''.join(f'<p>{esc(fix(line))}</p>' for line in block[1])
+    link = note_linker(note_numbers)
+    lines = ''.join(f'<p>{TOKEN.sub(link, esc(fix(line)))}</p>' for line in block[1])
     parts.append(f'<div class="{cls}">{lines}</div>')
 
 
@@ -267,44 +268,36 @@ def append_break(parts):
         parts.append('<div class="break">* * *</div>')
 
 
-def append_note(notes_html, chap_notes, block, note_no):
-    note_no += 1
-    chap_notes.append(note_no)
+def append_note(notes_html, block, note_numbers, referenced_notes):
+    if len(block) < 3 or block[2] not in note_numbers:
+        return
+    note_id = block[2]
+    note_no = note_numbers[note_id]
     note = esc(fix(block[1]))
+    label = f'<a href="#r{note_id}">{note_no}.</a>' if note_id in referenced_notes else f'{note_no}.'
     notes_html.append(
-        f'<aside epub:type="footnote" id="n{note_no}" class="footnote">'
-        f'<p><a href="#r{note_no}">{note_no}.</a> {note}</p></aside>'
+        f'<aside epub:type="footnote" id="n{note_id}" class="footnote">'
+        f'<p>{label} {note}</p></aside>'
     )
-    return note_no
 
 
-def render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_no):
+def render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_notes):
     for block in chapter:
         kind = block[0]
         if kind == 'p':
-            append_paragraph(parts, pending, block[1])
+            append_paragraph(parts, block[1], note_numbers)
         elif kind == 'verse':
-            append_verse(parts, block)
+            append_verse(parts, block, note_numbers)
         elif kind == 'deflist':
             append_definition_list(parts, block)
         elif kind == 'break':
             append_break(parts)
         elif kind == 'end':
             parts.append('<p class="end">SON</p>')
+        elif kind == 'date':
+            parts.append(f'<p class="date">{esc(fix(block[1]))}</p>')
         elif kind == 'note':
-            note_no = append_note(notes_html, chap_notes, block, note_no)
-    return note_no
-
-
-def replace_note_markers(body, pending, chap_notes, chapter_no):
-    if CFG.get('verbose') and len(chap_notes) != len(pending):
-        print('UYARI: bölüm', chapter_no, 'işaret', len(pending), 'not', len(chap_notes))
-    for i, n in enumerate(chap_notes[:len(pending)]):
-        pending[i] = n
-    for i, n in enumerate(pending):
-        rep = f'<a epub:type="noteref" class="noteref" id="r{n}" href="#n{n}">{n}</a>' if n else ''
-        body = body.replace(f'@@MARK{i}@@', rep)
-    return body
+            append_note(notes_html, block, note_numbers, referenced_notes)
 
 
 def remove_trailing_breaks(body):
@@ -313,28 +306,38 @@ def remove_trailing_breaks(body):
     return body
 
 
-def render_chapter(ci, chapter, title, nav_label, note_no):
+def render_chapter(ci, chapter, title, nav_label, note_numbers, referenced_notes):
     parts = [f'<h1 id="b{ci + 1}">{esc(title)}</h1>'] if title else []
-    pending = []
     notes_html = []
-    chap_notes = []
-    note_no = render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_no)
-    body = replace_note_markers('\n'.join(parts), pending, chap_notes, ci + 1)
+    render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_notes)
+    body = '\n'.join(parts)
     body = remove_trailing_breaks(body)
     if notes_html:
         body += '\n<section class="notes" epub:type="footnotes">\n' + '\n'.join(notes_html) + '\n</section>'
-    return (f'chapter{ci + 1}.xhtml', nav_label, page_xhtml(nav_label, body)), note_no
+    return f'chapter{ci + 1}.xhtml', nav_label, page_xhtml(nav_label, body)
 
 
-def render_chapters(chapters, titles):
-    note_no = 0
+def collect_note_links(blocks):
+    note_numbers = {}
+    referenced_notes = set()
+    for block in blocks:
+        if block[0] == 'note' and len(block) > 2 and block[2] is not None:
+            note_numbers[block[2]] = len(note_numbers) + 1
+        if block[0] == 'p':
+            referenced_notes.update(int(match) for match in TOKEN.findall(block[1]))
+        elif block[0] == 'verse':
+            for line in block[1]:
+                referenced_notes.update(int(match) for match in TOKEN.findall(line))
+    return note_numbers, referenced_notes
+
+
+def render_chapters(chapters, titles, note_numbers, referenced_notes):
     files = []
     for ci, chapter in enumerate(chapters):
         title = titles[ci]
         nav_label = title or fallback_chapter_label(chapter, ci)
-        rendered, note_no = render_chapter(ci, chapter, title, nav_label, note_no)
-        files.append(rendered)
-    return files, note_no
+        files.append(render_chapter(ci, chapter, title, nav_label, note_numbers, referenced_notes))
+    return files
 
 
 def cover_bytes():
@@ -346,9 +349,11 @@ def cover_bytes():
 
 
 def build_title_page():
+    author = f'<p>{esc(AUTHOR)}</p>' if AUTHOR else ''
     translator = f'<p>Çeviren: {esc(TRANSLATOR)}</p>' if TRANSLATOR else ''
+    publisher = f'<p>{esc(PUBLISHER)}</p>' if PUBLISHER else ''
     return page_xhtml(TITLE, f'''<div class="title-page"><h1>{esc(TITLE)}</h1>
-<p>{esc(AUTHOR)}</p><p>&#160;</p>{translator}<p>{esc(PUBLISHER)}</p></div>''')
+{author}<p>&#160;</p>{translator}{publisher}</div>''')
 
 
 def build_cover_page():
@@ -387,16 +392,17 @@ def build_manifest_and_spine(files):
 
 
 def build_opf(uid, now, manifest, spine):
+    aut = (f'<dc:creator id="aut">{esc(AUTHOR)}</dc:creator>\n'
+           f'<meta refines="#aut" property="role" scheme="marc:relators">aut</meta>\n') if AUTHOR else ''
     trl = (f'<dc:contributor id="trl">{esc(TRANSLATOR)}</dc:contributor>\n'
            f'<meta refines="#trl" property="role" scheme="marc:relators">trl</meta>\n') if TRANSLATOR else ''
+    pub = f'<dc:publisher>{esc(PUBLISHER)}</dc:publisher>\n' if PUBLISHER else ''
     return f'''<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="tr">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
 <dc:identifier id="uid">{uid}</dc:identifier>
 <dc:title>{esc(TITLE)}</dc:title>
-<dc:creator id="aut">{esc(AUTHOR)}</dc:creator>
-<meta refines="#aut" property="role" scheme="marc:relators">aut</meta>
-{trl}<dc:publisher>{esc(PUBLISHER)}</dc:publisher>
+{aut}{trl}{pub}
 <dc:language>tr</dc:language>
 <meta property="dcterms:modified">{now}</meta>
 <meta name="cover" content="cover-img"/>
@@ -407,24 +413,68 @@ def build_opf(uid, now, manifest, spine):
 
 
 def build_container():
-    return '''<?xml version="1.0" encoding="utf-8"?>
+    return f'''<?xml version="1.0" encoding="utf-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'''
+<rootfiles><rootfile full-path="{OEBPS_DIR}content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'''
 
 
 def write_epub(out, files, content):
     with zipfile.ZipFile(out, 'w') as z:
         z.writestr(zipfile.ZipInfo('mimetype'), 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
         z.writestr('META-INF/container.xml', content['container'], zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/content.opf', content['opf'], zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/nav.xhtml', content['nav'], zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/toc.ncx', content['ncx'], zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/style.css', CSS, zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/cover.jpg', content['cover'], zipfile.ZIP_STORED)
-        z.writestr('OEBPS/cover.xhtml', content['cover_page'], zipfile.ZIP_DEFLATED)
-        z.writestr('OEBPS/title.xhtml', content['title_page'], zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'content.opf', content['opf'], zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'nav.xhtml', content['nav'], zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'toc.ncx', content['ncx'], zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'style.css', CSS, zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'cover.jpg', content['cover'], zipfile.ZIP_STORED)
+        z.writestr(OEBPS_DIR + 'cover.xhtml', content['cover_page'], zipfile.ZIP_DEFLATED)
+        z.writestr(OEBPS_DIR + 'title.xhtml', content['title_page'], zipfile.ZIP_DEFLATED)
         for f, _, x in files:
-            z.writestr('OEBPS/' + f, x, zipfile.ZIP_DEFLATED)
+            z.writestr(OEBPS_DIR + f, x, zipfile.ZIP_DEFLATED)
+
+
+def html_member_names(z):
+    return [name for name in z.namelist() if name.startswith(OEBPS_DIR) and name.endswith(('.xhtml', '.html'))]
+
+
+def html_ids_by_name(z, names):
+    ids_by_name = {}
+    for name in names:
+        text = z.read(name).decode('utf-8')
+        ids_by_name[name] = set(re.findall(r'\bid="([^"]+)"', text))
+    return ids_by_name
+
+
+def internal_html_hrefs(text):
+    for href in re.findall(r'\bhref="([^"]+)"', text):
+        if href.startswith(('http:', 'https:', 'mailto:')):
+            continue
+        target_file, _, target_id = href.partition('#')
+        if target_file and not target_file.endswith(('.xhtml', '.html')):
+            continue
+        yield href, target_file, target_id
+
+
+def broken_href(href_parts, source_name, html_set, ids_by_name):
+    _href, target_file, target_id = href_parts
+    target_name = OEBPS_DIR + target_file if target_file else source_name
+    missing_file = target_file and target_name not in html_set
+    missing_id = target_id and target_id not in ids_by_name.get(target_name, set())
+    return missing_file or missing_id
+
+
+def validate_epub_links(out):
+    with zipfile.ZipFile(out) as z:
+        html_names = html_member_names(z)
+        ids_by_name = html_ids_by_name(z, html_names)
+        html_set = set(html_names)
+        broken = []
+        for name in html_names:
+            text = z.read(name).decode('utf-8')
+            broken.extend(f'{name}: {href}' for href, *parts in internal_html_hrefs(text)
+                          if broken_href((href, *parts), name, html_set, ids_by_name))
+    if broken:
+        raise RuntimeError('EPUB içinde bozuk bağlantı var: ' + ', '.join(broken[:10]))
 
 
 def build_epub_content(files):
@@ -445,8 +495,10 @@ def build_epub_content(files):
 def run(cfg, blocks):
     setup_book(cfg, blocks)
     chapters, titles = split_chapters(blocks)
-    files, note_no = render_chapters(chapters, titles)
+    note_numbers, referenced_notes = collect_note_links(blocks)
+    files = render_chapters(chapters, titles, note_numbers, referenced_notes)
     content = build_epub_content(files)
     out = CFG.get('out', 'kitap.epub')
     write_epub(out, files, content)
-    return out, note_no, len(files)
+    validate_epub_links(out)
+    return out, len(note_numbers), len(files)

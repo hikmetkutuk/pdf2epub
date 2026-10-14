@@ -9,6 +9,7 @@ Ayrıntılar için README.md dosyasına bakın.
 """
 
 import argparse
+import difflib
 import importlib
 import json
 import os
@@ -258,21 +259,32 @@ def save_cover(doc, no, yol):
     im.save(yol)
 
 
-KUNYE = re.compile(r'ISBN|Sertifika|Baskı\s*:|\d\.\s*[Bb]as[ıi]m|Yayınları|Yayınevi|Yayıncılık|Kapak\s+(tasarımı|resmi|düzeni)|'
-                   r'[Ee]ditör|Düzelti|Dizgi|Faks|Tel\s*:|e-posta|www\.|http|[Yy]ayın hakları|İÇİNDEKİLER|İçindekiler|'
-                   r'Matbaa|Neşriyat')
+KUNYE_STRONG = re.compile(r'ISBN|Sertifika\s*No|Baskı\s*:|Basım\s*:|\b\d{1,2}\.\s*[Bb]as(?:ım|kı)\s*:|'
+                          r'Tel\s*:|Faks|e-posta|www\.|https?:|[Yy]ayın hakları|Tüm hakları|İÇİNDEKİLER|'
+                          r'İçindekiler|KDV|[Ff]iyatı\s*:')
+KUNYE_WEAK = re.compile(r'Yayınları|Yayınevi|Yayıncılık|Kapak\s+(?:tasarımı|resmi|düzeni|resim)|'
+                        r'[Ee]ditör|Düzelti|Dizgi|Matbaa|Neşriyat|Çeviren|Özgün adı|Orijinal adı')
 
 
 def is_front_or_back_matter(tsv):
     """Künye, içindekiler, arka kapak gibi kitabın metni olmayan sayfaları tanır."""
     satirlar = [' '.join(w['t'] for w in d['words']) for d in structure.read_lines(tsv)]
+    satirlar = [s for s in satirlar if s.strip()]
     if not satirlar:
         return True
     metin = '\n'.join(satirlar)
-    if len(KUNYE.findall(metin)) >= 1 and len(satirlar) < 45:
+    long_lines = sum(1 for s in satirlar if len(s) > 45)
+    prose = len(satirlar) >= 15 and long_lines >= 0.6 * len(satirlar)
+    strong = len(KUNYE_STRONG.findall(metin))
+    weak = len(KUNYE_WEAK.findall(metin))
+    if strong >= 1 and (not prose or strong >= 2):
+        return True
+    if weak >= 2 and not prose:
         return True
     toc = sum(1 for s in satirlar if re.search(r'\D\s*[•.·…e]*\s*\d{1,3}\s*$', s) and len(s) < 60)
-    return toc >= 4 and toc >= 0.5 * len(satirlar)
+    if toc >= 4 and toc >= 0.5 * len(satirlar):
+        return True
+    return len(satirlar) <= 8 and long_lines == 0 and weak >= 1
 
 
 def ocr_quality_stats(tsv):
@@ -390,37 +402,62 @@ def page_number_from_file(path):
     return int(match.group(1)) if match else None
 
 
-def merge_dropcap_reference_lines(lines):
-    merged = []
-    pending = ''
-    for line in lines:
-        if pending:
-            if line[:1].islower():
-                merged.append(pending + line)
-            else:
-                merged.extend((pending, line))
-            pending = ''
-        elif len(line) == 1 and line.isalpha() and line.isupper():
-            pending = line
-        else:
-            merged.append(line)
-    if pending:
-        merged.append(pending)
-    return merged
-
-
-def pdf_reference_lines(doc, files):
-    references = {}
+def pdf_text_layer_words(doc, files):
+    text_layer = {}
     for path in files:
         page_no = page_number_from_file(path)
         if not page_no or page_no > len(doc):
             continue
-        lines = [structure.clean_reference_line(line) for line in doc[page_no - 1].get_text().splitlines()]
-        lines = [line for line in lines if line]
-        lines = merge_dropcap_reference_lines(lines)
-        if lines:
-            references[os.path.basename(path)] = lines
-    return references
+        words = doc[page_no - 1].get_text().replace('\xad', '-').split()
+        if words:
+            text_layer[os.path.basename(path)[:-4]] = words
+    return text_layer
+
+
+def pdf_text_layer_sample(files):
+    start = len(files) // 5
+    return files[start:start + 40]
+
+
+def normalized_pdf_words(text_layer, path):
+    words = text_layer.get(os.path.basename(path)[:-4], [])
+    return [word for word in (structure.norm_word(word) for word in words) if len(word) >= 3]
+
+
+def normalized_ocr_words(path):
+    words = [(structure.norm_word(word['t']), word['c']) for line in structure.read_lines(path) for word in line['words']]
+    return [(word, conf) for word, conf in words if len(word) >= 3]
+
+
+def count_confident_text_layer_differences(ocr, ref):
+    total = different = 0
+    matcher = difflib.SequenceMatcher(None, [word for word, _ in ocr], ref, autojunk=False)
+    for tag, i1, i2, _, _ in matcher.get_opcodes():
+        confident_words = sum(1 for index in range(i1, i2) if ocr[index][1] >= 95)
+        total += confident_words
+        different += confident_words if tag != 'equal' else 0
+    return total, different
+
+
+def pdf_text_layer_quality(doc, files, threshold=0.02):
+    text_layer = pdf_text_layer_words(doc, files)
+    if len(text_layer) < 0.5 * max(1, len(files)):
+        return {}, None
+
+    total = different = 0
+    for path in pdf_text_layer_sample(files):
+        ref = normalized_pdf_words(text_layer, path)
+        ocr = normalized_ocr_words(path)
+        if not ref or not ocr:
+            continue
+        page_total, page_different = count_confident_text_layer_differences(ocr, ref)
+        total += page_total
+        different += page_different
+
+    if total < 300:
+        return {}, None
+    ratio = different / total
+    return (text_layer if ratio < threshold else {}), ratio
 
 
 def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
@@ -432,7 +469,18 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
         structure.TESSERACT_ARGS = tess_args
 
     files = filter_non_text_pages(files)
-    structure.REFERENCE_LINES = pdf_reference_lines(doc, files) if doc is not None else {}
+    reference, ratio = pdf_text_layer_quality(doc, files) if doc is not None else ({}, None)
+    structure.REFERENCE.clear()
+    structure.REFERENCE.update(reference)
+    structure.VOCAB.clear()
+    if reference:
+        structure.VOCAB.update(structure.build_vocab(files))
+    structure.NOTE_ID[0] = 0
+    if ratio is not None:
+        if reference:
+            print(f"  PDF metin katmanı güvenilir (uyuşmazlık %{100 * ratio:.1f}): OCR'ın emin olmadığı kelimelerde kullanılacak")
+        else:
+            print(f'  PDF metin katmanı güvenilmez (uyuşmazlık %{100 * ratio:.1f}): kullanılmıyor')
     structure.HEADERS[:] = structure.detect_headers(files)
     pages = [p for p in (structure.page(f) for f in files) if p]
     structure.normalize(pages)

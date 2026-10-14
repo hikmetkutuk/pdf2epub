@@ -1,0 +1,31 @@
+{
+  "fixes": {
+    "Değnegil": "Değneği]",
+    "Lewestten": "Lewes'ten",
+    "Nighis": "Nights",
+    "Fowr": "Four",
+    "Lightbonse": "Lighthouse",
+    "Dorrir": "Dorrit",
+    "Anfi": "Ant",
+    "guruidaya": "guruldaya",
+    "düşüneeli": "düşünceli",
+    "gelmektc": "gelmekte",
+    "beklemcktcymiş": "beklemekteymiş"
+  },
+  "regex_fixes": [
+    ["\\bElekt\\?ra's[ıi]m\\b", "Elektra'sını"],
+    ["\\bStandar\\?ta\\b", "Standard'ta"],
+    ["\\bKayıp Cennetl\\b", "Kayıp Cennet]"],
+    ["\\bAnny Hala[\"”]", "Anny Hala*"],
+    ["\\bBliss Mutluluk\\|", "Bliss [Katıksız Mutluluk]"],
+    ["\\bAaron'ın Değneği\\]", "Aaron'ın Değneği]"],
+    ["\\bJ\\|\\.T Stephen\\b", "J. T. Stephen"],
+    ["\\bPYıllar\\|", "[Yıllar]"],
+    ["\\bH\\. \\|\\.", "H. J."],
+    ["\\|\\. Sally", "Sally"],
+    ["\\bLefter #o a Young Poef'in\\b", "Letter to a Young Poet'in"],
+    ["\\bMektupj\\b", "Mektup]"],
+    ["\\bV\\.?\\s*Wnin\\b", "V. W.'nin"],
+    ["\\bDorrir(?=')", "Dorrit"]
+  ]
+}

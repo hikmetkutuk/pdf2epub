@@ -4,7 +4,8 @@ Taranmış (ya da içindeki metni bozuk) roman ve öykü PDF'lerini, telefonda v
 
 Neler yapar:
 
-- Sayfaları kendi Türkçe OCR'ıyla baştan okur. PDF'in içindeki bozuk metin kullanılmaz.
+- Sayfaları kendi Türkçe OCR'ıyla baştan okur.
+- PDF'in içinde hazır metin katmanı varsa önce kalitesini ölçer. Güvenilirse yalnızca OCR'ın emin olmadığı kelimeleri ve kaybolan dipnot yıldızlarını düzeltmek için kullanır; güvenilmezse hiç kullanmaz.
 - Çift sayfalı taramaları ortadan böler, eğik taranmış sayfaları düzeltir.
 - Satırları gerçek paragraflara birleştirir, satır sonu tirelerini kaldırır.
 - Sayfa numaralarını ve sayfa başlarındaki kitap adını (üst bilgiyi) atar.
@@ -12,7 +13,9 @@ Neler yapar:
 - Bölüm ve öykü başlıklarını bulur, tıklanabilir içindekiler oluşturur.
 - Şiir, türkü ve ninnileri dize dize, italik olarak korur.
 - Sahne geçişlerini "* * *" ile gösterir.
-- Dipnotları tıklanabilir dipnot yapar.
+- Dipnotları tıklanabilir dipnot yapar ve EPUB içindeki bağlantıları yazma sonunda kontrol eder.
+- Günlük ve mektuplarda sağa yaslı tarih satırlarını korur.
+- Resim ya da faksimile gibi OCR'ı anlamsız çıkan sayfaları atlar.
 - İlk sayfayı kapak olarak ekler.
 
 ---
@@ -147,4 +150,5 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 - `epub_writer.py`: EPUB 3 dosyasını yazar (içindekiler, kapak, dipnotlar, Türkçe yazım düzeltmeleri).
 - `convert.bat`: Windows'ta sürükle-bırak ile çalıştırma.
 - `sample_corrections.json`: Kitaba özel düzeltme dosyası örneği.
+- `saramago_corrections.json`, `woolf_diary_corrections.json`: Genel koda gömülmeyen kitap özel düzeltme örnekleri.
 - `requirements.txt`: Gerekli Python kütüphaneleri.
