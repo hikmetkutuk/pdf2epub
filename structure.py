@@ -34,6 +34,7 @@ TESSERACT_ARGS = []
 LANG = 'tur'
 VERBOSE = False
 REFERENCE = {}
+RESCUE_REFERENCE = {}
 REF_MAX_CONF = 80
 VOCAB = {}
 REF_ODD_APOSTROPHE_SUFFIX = re.compile(r"['’][a-zçğıöşü]*(?:m|rn|nm)$")
@@ -113,6 +114,35 @@ def norm_hdr(t):
     return re.sub(r'[\W\d_]+', '', tr_lower(t))
 
 
+LOOSE_TITLE_MAP = str.maketrans({
+    'â': 'a',
+    'ç': 'c',
+    'ğ': 'g',
+    'ı': 'i',
+    'î': 'i',
+    'ö': 'o',
+    'ş': 's',
+    'û': 'u',
+    'ü': 'u',
+})
+
+
+def loose_norm_title(t):
+    return norm_hdr(t).translate(LOOSE_TITLE_MAP)
+
+
+def loose_title_match(left, right):
+    left_norm = loose_norm_title(left)
+    right_norm = loose_norm_title(right)
+    if not left_norm or not right_norm:
+        return False
+    if left_norm == right_norm:
+        return True
+    if abs(len(left_norm) - len(right_norm)) > max(3, 0.25 * len(right_norm)):
+        return False
+    return difflib.SequenceMatcher(None, left_norm, right_norm).ratio() >= 0.82
+
+
 def norm_match_text(t):
     t = tr_lower(t).replace('’', "'").replace('‘', "'").replace('`', "'")
     return re.sub(r"[^0-9a-zçğıöşü]+", "", t)
@@ -167,7 +197,9 @@ def build_vocab(files):
     return counts
 
 
-def reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
+def reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm, rescue=False):
+    if rescue:
+        return rescue_reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm)
     if not reference_word_is_similar_enough(ocr_word, ocr_norm, ref_norm):
         return False
     ocr_known = VOCAB.get(ocr_norm, 0) >= 3
@@ -175,6 +207,23 @@ def reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
     if ocr_known and not ref_known:
         return False
     return not (reference_word_is_suspect(ref_word) and not ref_known)
+
+
+def rescue_reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
+    if not reference_word_is_similar_enough(ocr_word, ocr_norm, ref_norm):
+        return False
+    if ocr_word['c'] >= 70 or not ocr_word_is_suspicious(ocr_word['t']):
+        return False
+    return not reference_word_is_suspect(ref_word)
+
+
+def ocr_word_is_suspicious(text):
+    lowered = tr_lower(text)
+    return (
+        text_badness(text) > 0
+        or bool(re.search(r'[#|?\\]', text))
+        or bool(re.search(r'[xw]', lowered))
+    )
 
 
 def reference_word_is_similar_enough(ocr_word, ocr_norm, ref_norm):
@@ -196,8 +245,8 @@ def reference_word_is_suspect(ref_word):
     return bool(REF_ODD_APOSTROPHE_SUFFIX.search(lowered))
 
 
-def apply_reference_word(ocr_word, ref_word, ocr_norm, ref_norm):
-    if reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm):
+def apply_reference_word(ocr_word, ref_word, ocr_norm, ref_norm, rescue=False):
+    if reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm, rescue=rescue):
         ocr_word['t'] = ref_word
         ocr_word['c'] = max(ocr_word['c'], 60.0)
 
@@ -209,9 +258,11 @@ def apply_reference_footnote_marker(ocr_word, ref_word):
 
 
 def apply_reference_text(lines, page_name):
-    ref = REFERENCE.get(os.path.basename(page_name)[:-4])
+    page_key = os.path.basename(page_name)[:-4]
+    ref = REFERENCE.get(page_key) or RESCUE_REFERENCE.get(page_key)
     if not ref:
         return lines
+    rescue = page_key not in REFERENCE
     words = [word for line in lines for word in line['words']]
     ocr_norms = [norm_word(word['t']) for word in words]
     ref_norms = [norm_word(text) for text in ref]
@@ -227,6 +278,7 @@ def apply_reference_text(lines, page_name):
                     ref[j1 + offset],
                     ocr_norms[i1 + offset],
                     ref_norms[j1 + offset],
+                    rescue=rescue,
                 )
     for line in lines:
         finalize(line, line['words'])
@@ -304,11 +356,23 @@ def open_image_copy(path):
 
 
 def drop_page_numbers(lines, page_h):
-    if lines and PAGE_NUM.fullmatch(lines[-1]['t'].strip()) and lines[-1]['y'] > page_h * 0.8:
+    if lines and is_page_number_noise(lines[-1], page_h, at_bottom=True):
         lines = lines[:-1]
-    if lines and PAGE_NUM.fullmatch(lines[0]['t'].strip()) and lines[0]['y'] < page_h * 0.2:
+    if lines and is_page_number_noise(lines[0], page_h, at_bottom=False):
         lines = lines[1:]
     return lines
+
+
+def is_page_number_noise(line, page_h, at_bottom):
+    text = line['t'].strip()
+    if not text:
+        return False
+    in_margin = line['y'] > page_h * 0.9 if at_bottom else line['y'] < page_h * 0.1
+    if PAGE_NUM.fullmatch(text):
+        return in_margin or (line['y'] > page_h * 0.8 if at_bottom else line['y'] < page_h * 0.2)
+    if norm_hdr(text) == 'son':
+        return False
+    return in_margin and letters(text) <= 3 and len(text) <= 5
 
 
 def drop_running_headers(lines, page_h):
@@ -353,9 +417,14 @@ def is_mid_page_title_candidate(lines, page_h, line_gap, spacing):
     )
 
 
-def is_valid_top_title(lines, W):
+def is_valid_top_title(lines, W, allow_header=False):
     first = lines[0]
-    return centered_top_title(lines, W) and valid_chapter_title(first['t']) and len(first['t']) < 60 and not is_header(first['t'])
+    return (
+        centered_top_title(lines, W)
+        and valid_chapter_title(first['t'])
+        and len(first['t']) < 60
+        and (allow_header or not is_header(first['t']))
+    )
 
 
 def detect_top_title(lines, page_h, W):
@@ -364,7 +433,7 @@ def detect_top_title(lines, page_h, W):
     line_gap = lines[1]['y'] - lines[0]['y']
     spacing = line_spacing_after_first(lines)
     first = lines[0]
-    if is_mid_page_title_candidate(lines, page_h, line_gap, spacing) and is_valid_top_title(lines, W):
+    if is_mid_page_title_candidate(lines, page_h, line_gap, spacing) and is_valid_top_title(lines, W, allow_header=True):
         return first['t'], lines[1:]
     if first['y'] >= page_h * 0.18 or line_gap <= 2 * spacing:
         return None, lines
@@ -443,11 +512,17 @@ def classify_line(d, cleaned, B):
     t = d['t']
     if is_break_line(t):
         return 'break'
+    if is_page_reference_text(t):
+        return 'text'
     if cleaned and re.search(r'\w-$', cleaned[-1]['t']) and abs(d['x'] - B) < 60 and letters(t) >= 1 and t[:1].islower():
         return 'text'
     noisy_short = letters(t) <= 3 and d['conf'] < 75 and not re.fullmatch(r'\W*SON\W*', t)
     noisy = noisy_short or letters(t) < 2 or (d['conf'] < 45 and letters(t) < 6) or d['conf'] < 30
     return None if noisy else 'text'
+
+
+def is_page_reference_text(text):
+    return bool(re.fullmatch(r'[sS]\.?\s*[0-9]{1,4}\.?', text.strip()))
 
 
 def clean_ocr_lines(lines, B, R):
@@ -483,6 +558,63 @@ def split_footnotes(lines, page_h, H):
         else:
             body.append(d)
     return [join_lines(n) for n in notes], body
+
+
+def word_char_width(line):
+    words = [word for word in line.get('words', []) if letters(word['t']) >= 2]
+    if not words:
+        return (line['r'] - line['x']) / max(1, len(line['t']))
+    width = sum(word['r'] - word['x'] for word in words)
+    char_count = sum(len(word['t']) for word in words)
+    return width / max(1, char_count)
+
+
+def base_char_width(lines):
+    widths = [word_char_width(line) for line in lines if line['kind'] == 'text' and len(line['t']) > 30]
+    return st.median(widths) if widths else 0
+
+
+def line_is_small_footnote(line, B, H, base_width):
+    if line['kind'] != 'text':
+        return False
+    left_aligned = line['x'] - B < 0.2 * max(1, line.get('width', line['r'] - B))
+    small_height = line['h'] < H * 0.85
+    narrow_chars = base_width and len(line['t']) >= 8 and word_char_width(line) < 0.85 * base_width
+    return left_aligned and (small_height or narrow_chars)
+
+
+def trailing_body_end_before_notes(body):
+    end = len(body)
+    while end > 0 and body[end - 1]['kind'] == 'break' and len(body[end - 1]['t'].strip()) <= 2:
+        end -= 1
+    return end
+
+
+def trailing_unmarked_note_start(body, end, page_h, B, H, base_width, spacing):
+    index = end
+    start = None
+    while index > 1:
+        line = body[index - 1]
+        if not line_is_small_footnote(line, B, H, base_width):
+            break
+        index -= 1
+        if line['y'] - body[index - 1]['y'] > 1.5 * spacing:
+            start = index
+            break
+    if start is None or end - start > 6 or body[start]['y'] <= page_h * 0.6:
+        return None
+    return start
+
+
+def recover_unmarked_footnotes(notes, body, page_h, B, H, base_width, spacing):
+    if len(body) <= 6:
+        return notes, body
+    end = trailing_body_end_before_notes(body)
+    start = trailing_unmarked_note_start(body, end, page_h, B, H, base_width, spacing)
+    if start is None:
+        return notes, body
+    recovered = join_lines(line['t'] for line in body[start:end])
+    return [recovered, *notes], body[:start]
 
 
 def bind_footnotes(notes, body):
@@ -552,7 +684,11 @@ def page(f):
     lines = clean_ocr_lines(lines, B, R)
     hs = [d['h'] for d in lines if d['kind'] == 'text']
     H = st.median(hs) if hs else 60
+    base_width = base_char_width(lines)
+    line_spacings = [b['y'] - a['y'] for a, b in successive_pairs(lines)]
+    spacing = st.median(line_spacings) if line_spacings else 60
     notes, body = split_footnotes(lines, page_h, H)
+    notes, body = recover_unmarked_footnotes(notes, body, page_h, B, H, base_width, spacing)
     notes = bind_footnotes(notes, body)
     body = recover_gaps(f, body, B, R)
     add_body_metrics(body, B, R)
@@ -702,10 +838,16 @@ def join_lines(parts):
         if not s:
             s = p
         elif re.search(r'\w-$', s) and p[:1].islower():
-            s = s[:-1] + p
+            s = merge_hyphenated_parts(s[:-1], p)
         else:
             s += ' ' + p
     return s
+
+
+def merge_hyphenated_parts(left, right):
+    if re.search(r'[aeıioöuü]$', left) and re.match(r'[ıiuü]k\b', right):
+        return left + 'l' + right
+    return left + right
 
 
 def clean_text(s):
@@ -788,20 +930,121 @@ def normalize(pages):
             normalize_page_width(page, width)
 
 
+def is_repeated_page_title(line, current_title):
+    if not current_title or line.get('kind') != 'text':
+        return False
+    text = line.get('t', '')
+    return len(text) <= 80 and loose_title_match(text, current_title)
+
+
+def remove_repeated_page_title(body, current_title):
+    if not body or not is_repeated_page_title(body[0], current_title):
+        return body
+    body = [dict(line) for line in body[1:]]
+    if body:
+        body[0]['gap'] = False
+    return body
+
+
+def page_starts_chapter(page, page_title):
+    return bool(page_title) or (page['first_y'] > page['page_h'] * 0.35 and len(page['body']) > 3)
+
+
+def body_for_items(page, page_title, current_title):
+    if page_title:
+        return page['body']
+    return remove_repeated_page_title(page['body'], current_title)
+
+
+def append_body_items(items, body, chapter_start):
+    definition_rows = definition_list_rows(body)
+    if definition_rows:
+        items.append({'kind': 'deflist', 'rows': definition_rows})
+        return
+    for i, d in enumerate(body):
+        items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
+
+
+def append_note_items(items, notes):
+    for note_id, note in notes:
+        items.append({'kind': 'note', 't': clean_text(note), 'id': note_id})
+
+
+def side_label_match(text):
+    return re.match(r'^(Üç\s+[^\d:]{2,20}:)\s+(.+)$', text)
+
+
+def side_label_group_line(line):
+    text = line.get('t', '')
+    return line.get('rel', 0) > 140 or re.match(r'^[>.\s-]*[0-9]+\.', text) or len(text) < 45
+
+
+def first_side_label_group_index(body, label_index):
+    start = label_index
+    cursor = label_index - 1
+    while cursor >= 0 and side_label_group_line(body[cursor]):
+        start = cursor
+        if body[cursor].get('gap'):
+            break
+        cursor -= 1
+    return start
+
+
+def last_side_label_group_index(body, label_index):
+    end = label_index + 1
+    while end < len(body) and not body[end].get('gap') and side_label_group_line(body[end]):
+        end += 1
+    return end
+
+
+def side_label_list_line(source, text, gap=False):
+    line = dict(source)
+    line['t'] = re.sub(r'^[>.\s-]+', '', text).replace('farklıolan', 'farklı olan')
+    line['gap'] = gap
+    line['rel'] = max(line.get('rel', 0), 180)
+    line['verse'] = True
+    line['manual_verse'] = True
+    return line
+
+
+def recover_side_label_lists(body):
+    out = []
+    index = 0
+    while index < len(body):
+        match = side_label_match(body[index].get('t', ''))
+        if not match or body[index].get('rel', 0) > 80:
+            out.append(body[index])
+            index += 1
+            continue
+        start = first_side_label_group_index(body, index)
+        end = last_side_label_group_index(body, index)
+        previous_group_count = index - start
+        if previous_group_count:
+            del out[-previous_group_count:]
+        label, rest = match.groups()
+        out.append(side_label_list_line(body[start], label, gap=body[start].get('gap', False)))
+        for line in body[start:index]:
+            out.append(side_label_list_line(line, line['t']))
+        out.append(side_label_list_line(body[index], rest))
+        for line in body[index + 1:end]:
+            out.append(side_label_list_line(line, line['t']))
+        index = end
+    return out
+
+
 def build_items(pages):
     items = []
+    current_title = None
     for pg in pages:
-        chapter_start = bool(pg.get('title')) or (pg['first_y'] > pg['page_h'] * 0.35 and len(pg['body']) > 3)
+        page_title = pg.get('title')
+        chapter_start = page_starts_chapter(pg, page_title)
         if chapter_start:
-            items.append({'kind': 'chapter', 'title': pg.get('title')})
-        definition_rows = definition_list_rows(pg['body'])
-        if definition_rows:
-            items.append({'kind': 'deflist', 'rows': definition_rows})
-        else:
-            for i, d in enumerate(pg['body']):
-                items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
-        for note_id, note in pg['notes']:
-            items.append({'kind': 'note', 't': clean_text(note), 'id': note_id})
+            if page_title:
+                current_title = page_title
+            items.append({'kind': 'chapter', 'title': page_title})
+        body = recover_side_label_lists(body_for_items(pg, page_title, current_title))
+        append_body_items(items, body, chapter_start)
+        append_note_items(items, pg['notes'])
     return items
 
 
@@ -905,7 +1148,7 @@ def starts_regular_paragraph(d, nxt):
 def verse_candidates(seq):
     candidates = []
     for j, d in enumerate(seq):
-        d['verse'] = False
+        d['verse'] = bool(d.get('manual_verse'))
         nxt = seq[j + 1] if j + 1 < len(seq) else None
         candidates.append(base_verse_candidate(d) and not starts_regular_paragraph(d, nxt))
     return candidates

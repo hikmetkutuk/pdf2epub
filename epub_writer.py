@@ -54,6 +54,7 @@ REGEX_FIXES = [
     (r"(?<!\w)#he\b", "the"),
     (r"\b191#te\b", "1914'te"),
     (r"(?<!\w)#ünde\b", "4'ünde"),
+    (r"(?<!\w)#(?=[a-zçğıöşü]{2,}\b)", "n"),
     (r"(\w) (ğ\w)", r"\1\2"), (r"\bdogup\b", "doğup"),
 ]
 OLD_MARK = re.compile(r"\(\s*\*\s*[\)Y]")
@@ -130,6 +131,8 @@ def fix(s):
         s = re.sub(a, b, s)
     for a, b in CFG.get('fixes', {}).items():
         s = re.sub(r'(?<!\w)' + re.escape(a) + r'(?!\w)', b, s)
+    s = fix_question_mark_apostrophes(s)
+    s = re.sub(r'\bk1\b', 'ki', s)
     s = re.sub(r'(?<=[a-zçğıöşü])[01](?=[a-zçğıöşü])', lambda m: 'o' if m.group(0) == '0' else 'ı', s)
     s = re.sub(r'\b1(?=[a-zçğıöşü]{2,})', '', s)
     s = hyphen_fix(s)
@@ -144,6 +147,14 @@ def fix(s):
     s = quote_as_apostrophe(s)
     s = fix_translation_brackets(s)
     return s
+
+
+def fix_question_mark_apostrophes(s):
+    letter = r"[^\W\d_]"
+    suffix = r"(?:n?[ıiuü]n|[dt][ae]n?|y[ae]|l[ae]|[ıiuü]m|s[ıiuü]n)"
+    proper = r"([A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]{1,30})"
+    s = re.sub(rf"\b{proper}\?({suffix}\b)", r"\1'\2", s)
+    return re.sub(rf"(?<={letter})\?(?={letter})", '', s)
 
 
 def esc(s):

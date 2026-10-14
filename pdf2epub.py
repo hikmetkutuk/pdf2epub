@@ -442,7 +442,7 @@ def count_confident_text_layer_differences(ocr, ref):
 def pdf_text_layer_quality(doc, files, threshold=0.02):
     text_layer = pdf_text_layer_words(doc, files)
     if len(text_layer) < 0.5 * max(1, len(files)):
-        return {}, None
+        return {}, {}, None
 
     total = different = 0
     for path in pdf_text_layer_sample(files):
@@ -455,9 +455,9 @@ def pdf_text_layer_quality(doc, files, threshold=0.02):
         different += page_different
 
     if total < 300:
-        return {}, None
+        return {}, {}, None
     ratio = different / total
-    return (text_layer if ratio < threshold else {}), ratio
+    return (text_layer if ratio < threshold else {}), text_layer, ratio
 
 
 def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
@@ -469,9 +469,12 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
         structure.TESSERACT_ARGS = tess_args
 
     files = filter_non_text_pages(files)
-    reference, ratio = pdf_text_layer_quality(doc, files) if doc is not None else ({}, None)
+    reference, rescue_reference, ratio = pdf_text_layer_quality(doc, files) if doc is not None else ({}, {}, None)
     structure.REFERENCE.clear()
     structure.REFERENCE.update(reference)
+    structure.RESCUE_REFERENCE.clear()
+    if not reference and ratio is not None and ratio < 0.08:
+        structure.RESCUE_REFERENCE.update(rescue_reference)
     structure.VOCAB.clear()
     if reference:
         structure.VOCAB.update(structure.build_vocab(files))
@@ -480,7 +483,12 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
         if reference:
             print(f"  PDF metin katmanı güvenilir (uyuşmazlık %{100 * ratio:.1f}): OCR'ın emin olmadığı kelimelerde kullanılacak")
         else:
-            print(f'  PDF metin katmanı güvenilmez (uyuşmazlık %{100 * ratio:.1f}): kullanılmıyor')
+            message = f'  PDF metin katmanı güvenilmez (uyuşmazlık %{100 * ratio:.1f})'
+            if structure.RESCUE_REFERENCE:
+                message += ': yalnızca şüpheli düşük güvenli kelimelerde kullanılacak'
+            else:
+                message += ': kullanılmıyor'
+            print(message)
     structure.HEADERS[:] = structure.detect_headers(files)
     pages = [p for p in (structure.page(f) for f in files) if p]
     structure.normalize(pages)
@@ -492,7 +500,7 @@ def drop_short_preface(blocks):
     if not first:
         return blocks
     before = [b for b in blocks[:first] if b[0] == 'p']
-    if len(before) < 25:
+    if 0 < len(before) < 25:
         print(f'  ilk bölümden önceki {len(before)} paragraf (künye vb.) atıldı')
         return blocks[first:]
     return blocks
