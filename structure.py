@@ -17,7 +17,7 @@ T = TypeVar('T')
 np: Any = importlib.import_module('numpy')
 Image: Any = importlib.import_module('PIL.Image')
 
-FN_START = re.compile(r'^\W{0,3}(\(\s*[*9©]\s*[)Y]|©\)|\(\*)\s*')
+FN_START = re.compile(r'^\W{0,3}(\(\s*[*9©]\s*[)Y]|©\)|\(\*|\*)\s*')
 MARK = re.compile(r"\(\s*\*\s*[)Y]?")
 HEADER = re.compile(r"(\d+\s*$|^\d+\s*/)")
 IMG_DIR = 'desk'
@@ -25,6 +25,7 @@ TESSERACT = 'tesseract'
 TESSERACT_ARGS = []
 LANG = 'tur'
 VERBOSE = False
+REFERENCE_LINES = {}
 NON_LETTER = r"[^A-Za-zÇĞİÖŞÜçğıöşü_]"
 PAGE_NUM = re.compile(rf"{NON_LETTER}{{0,2}}[0-9]{{1,4}}{NON_LETTER}{{0,2}}")
 END_PUNCT = tuple('.!?:…"”\'»')
@@ -33,6 +34,7 @@ BREAK_CHARS = set(' \t\r\n\f\v*#∴•·.,:;©°+')
 JUNK_TOKEN_CHARS = set('|İ![]{}')
 BAD_GAP_CHARS = set('<>»«|—')
 GAP_TRAILING_CHARS = set('.,!?;:"\'')
+ODD_APOSTROPHE_SUFFIX = re.compile(r"\b[^\W\d_]+['’][bcçdfgğhjklmnprsştvyz]{3,}\b", re.IGNORECASE)
 
 
 def successive_pairs(iterable: Iterable[T]) -> Iterator[tuple[T, T]]:
@@ -92,6 +94,68 @@ def tr_lower(t):
 
 def norm_hdr(t):
     return re.sub(r'[\W\d_]+', '', tr_lower(t))
+
+
+def norm_match_text(t):
+    t = tr_lower(t).replace('’', "'").replace('‘', "'").replace('`', "'")
+    return re.sub(r"[^0-9a-zçğıöşü]+", "", t)
+
+
+def clean_reference_line(t):
+    t = t.replace('\xad', '-')
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
+
+
+def text_badness(t):
+    score = 0
+    score += 3 * len(re.findall(r"[#|�]", t))
+    score += 4 * len(ODD_APOSTROPHE_SUFFIX.findall(tr_lower(t)))
+    score += 2 * len(re.findall(r"\b\w+\?+\w+\b", t))
+    score += abs(t.count('[') - t.count(']'))
+    score += abs(t.count('(') - t.count(')'))
+    return score
+
+
+def reference_is_safer(ocr_text, ref_text):
+    if ODD_APOSTROPHE_SUFFIX.search(tr_lower(ref_text)) and not ODD_APOSTROPHE_SUFFIX.search(tr_lower(ocr_text)):
+        return False
+    return text_badness(ref_text) <= text_badness(ocr_text) + 1
+
+
+def best_reference_match(text, ref_lines, start):
+    needle = norm_match_text(text)
+    if len(needle) < 8:
+        return None, start
+    end = min(len(ref_lines), start + 8)
+    begin = max(0, start - 2)
+    best = (0.0, None, start)
+    for index in range(begin, end):
+        ref = ref_lines[index]
+        hay = norm_match_text(ref)
+        if len(hay) < 8:
+            continue
+        ratio = difflib.SequenceMatcher(None, needle, hay).ratio()
+        length_ratio = min(len(needle), len(hay)) / max(len(needle), len(hay))
+        score = ratio * length_ratio
+        if score > best[0]:
+            best = (score, ref, index)
+    if best[0] >= 0.72 and reference_is_safer(text, best[1]):
+        return best[1], best[2] + 1
+    return None, start
+
+
+def apply_reference_text(lines, page_name):
+    ref_lines = REFERENCE_LINES.get(os.path.basename(page_name), [])
+    if ref_lines:
+        ref_index = 0
+        for line in lines:
+            if line['kind'] not in {'text', 'break'}:
+                continue
+            ref, ref_index = best_reference_match(line['t'], ref_lines, ref_index)
+            if ref:
+                line['t'] = ref
+    return lines
 
 
 def detect_headers(files):
@@ -174,17 +238,16 @@ def estimate_text_bounds(lines):
     if len(full) < 3:
         R = max((d['r'] for d in lines), default=0)
         B = min((d['x'] for d in lines if d['x'] > 8), default=0)
-        return R, B
-
-    hy = [d['r'] for d in lines if re.search(r'\w-$', d['t'])]
-    if len(hy) >= 3:
-        R = st.median(hy)
     else:
-        m = st.median(d['r'] for d in full)
-        rs = sorted(d['r'] for d in lines if d['r'] < m + 120)
-        R = rs[int(len(rs) * 0.85)]
-    xs = sorted(d['x'] for d in full)
-    B = xs[len(xs) // 7]
+        hy = [d['r'] for d in lines if re.search(r'\w-$', d['t'])]
+        if len(hy) >= 3:
+            R = st.median(hy)
+        else:
+            m = st.median(d['r'] for d in full)
+            rs = sorted(d['r'] for d in lines if d['r'] < m + 120)
+            R = rs[int(len(rs) * 0.85)]
+        xs = sorted(d['x'] for d in full)
+        B = xs[len(xs) // 7]
     return R, B
 
 
@@ -215,6 +278,28 @@ def junk_word(w, R, B):
     return outside_body and low_signal
 
 
+def has_confident_neighbor(words, index, step):
+    neighbor_index = index + step
+    while 0 <= neighbor_index < len(words):
+        neighbor = words[neighbor_index]
+        if letters(neighbor['t']) >= 2:
+            return neighbor['c'] >= 50
+        neighbor_index += step
+    return False
+
+
+def keep_low_conf_word(word, words, index, B, R):
+    if word['c'] >= 10:
+        return True
+    if letters(word['t']) < 4 or word['x'] < B - 15 or word['r'] > R + 30:
+        return False
+    if words and words[0]['t'].startswith('*') and has_confident_neighbor(words, index, 1):
+        return True
+    if index == len(words) - 1 and has_confident_neighbor(words, index, -1):
+        return True
+    return has_confident_neighbor(words, index, -1) and has_confident_neighbor(words, index, 1)
+
+
 def classify_line(d, cleaned, B):
     t = d['t']
     if is_break_line(t):
@@ -231,7 +316,7 @@ def clean_ocr_lines(lines, B, R):
     for d in lines:
         ws = [w for w in d['words'] if not junk_word(w, R, B)]
         ws = [w for w in ws if not all(ch in JUNK_TOKEN_CHARS for ch in w['t'])] or ws
-        ws = [w for w in ws if w['c'] >= 10]  # güven 0: süsleme/çizgi çöpü
+        ws = [w for i, w in enumerate(ws) if keep_low_conf_word(w, ws, i, B, R)]
         if not ws:
             continue
         d = finalize(d, ws)
@@ -288,6 +373,7 @@ def page(f):
     hs = [d['h'] for d in lines if d['kind'] == 'text']
     H = st.median(hs) if hs else 60
     notes, body = split_footnotes(lines, page_h, H)
+    body = apply_reference_text(body, f)
     body = recover_gaps(f, body, B, R)
     add_body_metrics(body, B, R)
     first_y = body[0]['y'] if body else 0
@@ -434,17 +520,23 @@ def join_lines(parts):
 
 
 def clean_text(s):
+    strip_noise = EDGE_NOISE.replace('*', '')
     s = s.replace('“', '"').replace('”', '"').replace('„', '"').replace("''", '"')
     s = re.sub(r'\s+([,.;:!?])', r'\1', s)
     s = re.sub(r'\s{2,}', ' ', s)
     s = re.sub(r'^[-—–]\s*', '– ', s)
     s = re.sub(r'\s[-—]\s', ' – ', s)
-    s = s.rstrip(EDGE_NOISE)
-    s = s.lstrip(EDGE_NOISE)
+    s = s.rstrip(strip_noise)
+    s = s.lstrip(strip_noise)
+    s = re.sub(r'(?<=\w)/$', '*', s)
     s = re.sub(r'^[a-zı] (?=[A-ZÇĞİÖŞÜ])', '', s)
     s = re.sub(r'([.!?…":]) (?:[A-ZÇĞİÖŞÜ]{1,2}|[a-zı][A-ZÇĞİÖŞÜ])$', r'\1', s)
     s = re.sub(r'(\w)-\.$', r'\1.', s)
     return s.strip()
+
+
+def has_unclosed_span(text):
+    return text.count('[') > text.count(']') or text.count('(') > text.count(')')
 
 
 def open_ratio(lines):
@@ -513,11 +605,91 @@ def build_items(pages):
         chapter_start = bool(pg.get('title')) or (pg['first_y'] > pg['page_h'] * 0.35 and len(pg['body']) > 3)
         if chapter_start:
             items.append({'kind': 'chapter', 'title': pg.get('title')})
-        for i, d in enumerate(pg['body']):
-            items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
+        definition_rows = definition_list_rows(pg['body'])
+        if definition_rows:
+            items.append({'kind': 'deflist', 'rows': definition_rows})
+        else:
+            for i, d in enumerate(pg['body']):
+                items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
         for n in pg['notes']:
             items.append({'kind': 'note', 't': clean_text(n)})
     return items
+
+
+def largest_word_gap(words):
+    gaps = [(words[i + 1]['x'] - words[i]['r'], i, words[i + 1]['x']) for i in range(len(words) - 1)]
+    return max(gaps, default=(0, None, None))
+
+
+def likely_definition_gap(line):
+    words = line.get('words') or []
+    if len(words) < 2:
+        return None
+    gap, index, column = largest_word_gap(words)
+    threshold = max(70, 0.08 * line['width'])
+    if gap < threshold or index is None:
+        return None
+    left_text = ' '.join(w['t'] for w in words[:index + 1])
+    right_text = ' '.join(w['t'] for w in words[index + 1:])
+    if letters(left_text) < 2 or letters(right_text) < 2:
+        return None
+    if not (line['x'] + 0.18 * line['width'] < column < line['x'] + 0.65 * line['width']):
+        return None
+    return column
+
+
+def definition_column(lines):
+    columns = [column for column in (likely_definition_gap(line) for line in lines) if column is not None]
+    if len(columns) < 4:
+        return None
+    column = st.median(columns)
+    clustered = sum(1 for value in columns if abs(value - column) <= 45)
+    if clustered < max(4, int(0.6 * len(columns))):
+        return None
+    return column
+
+
+def split_definition_line(line, column):
+    words = line.get('words') or []
+    split_at = next((i for i, word in enumerate(words) if word['x'] >= column - 45), None)
+    if split_at is None or split_at == 0:
+        return None
+    term = clean_text(' '.join(w['t'] for w in words[:split_at]))
+    desc = clean_text(' '.join(w['t'] for w in words[split_at:]))
+    if letters(term) < 1 or letters(desc) < 2:
+        return None
+    return [term, desc]
+
+
+def is_definition_continuation(line, column):
+    return abs(line['x'] - column) <= 70 or line['x'] >= column - 35
+
+
+def append_definition_continuation(rows, text):
+    rows[-1][1] = clean_text(join_lines([rows[-1][1], text]))
+
+
+def definition_list_rows(lines):
+    text_lines = [line for line in lines if line['kind'] == 'text']
+    column = definition_column(text_lines)
+    if column is None:
+        return None
+
+    rows = []
+    split_count = 0
+    for line in text_lines:
+        row = split_definition_line(line, column)
+        if row:
+            rows.append(row)
+            split_count += 1
+        elif rows and is_definition_continuation(line, column):
+            append_definition_continuation(rows, line['t'])
+        else:
+            return None
+
+    if len(rows) < 4 or split_count < 4:
+        return None
+    return rows
 
 
 def base_verse_candidate(d):
@@ -657,7 +829,16 @@ class BlockBuilder:
         self.prev = None
 
     def add_note(self, text):
+        self.flush()
+        self.flush_verse(self.verse_class())
         self.blocks.append(('note', text))
+        self.prev = None
+
+    def add_definition_list(self, rows):
+        self.flush()
+        self.flush_verse(self.verse_class())
+        self.blocks.append(('deflist', rows))
+        self.prev = None
 
     def add_break(self):
         self.flush()
@@ -674,16 +855,18 @@ class BlockBuilder:
         if self.prev is not None and re.search(r'\w-$', self.prev['t']) and text[:1].islower():
             item['gap'] = False
             item['rel'] = 0
+        if self.prev is not None and has_unclosed_span(self.prev['t']):
+            item['gap'] = False
+            item['rel'] = 0
 
     def is_continued_verse_gap(self, item):
         return item['gap'] and self.prev is not None and item.get('verse') and self.prev.get('verse')
 
     def keep_verse_gap(self, item, text):
-        if not self.is_continued_verse_gap(item):
-            return
-        self.flush_verse('verse')
-        self.verse_buf.append(text)
-        self.prev = item
+        if self.is_continued_verse_gap(item):
+            self.flush_verse('verse')
+            self.verse_buf.append(text)
+            self.prev = item
 
     def absorb_verse_gap(self, item):
         has_verse_neighbor = self.prev is not None and (item.get('verse') or self.prev.get('verse'))
@@ -693,14 +876,13 @@ class BlockBuilder:
             item['gap'] = False
 
     def close_paragraph_gap(self, item):
-        if not (item['gap'] and self.prev is not None):
-            return
-        self.flush()
-        self.flush_verse(self.verse_class())
-        if self.in_epigraph:
-            self.in_epigraph = False
-        else:
-            self.append_break()
+        if item['gap'] and self.prev is not None:
+            self.flush()
+            self.flush_verse(self.verse_class())
+            if self.in_epigraph:
+                self.in_epigraph = False
+            else:
+                self.append_break()
 
     def close_epigraph_if_needed(self, item):
         if self.in_epigraph and not (item['rel'] > 150):
@@ -736,17 +918,19 @@ class BlockBuilder:
         self.merge_hyphenated_line(item, text)
         if re.fullmatch(r'\W*SON\W*', text):
             self.add_end()
-            return
-        if self.is_continued_verse_gap(item):
+        elif self.is_continued_verse_gap(item):
             self.keep_verse_gap(item, text)
-            return
-        self.absorb_verse_gap(item)
-        self.close_paragraph_gap(item)
-        self.close_epigraph_if_needed(item)
+        else:
+            self.absorb_verse_gap(item)
+            self.close_paragraph_gap(item)
+            self.close_epigraph_if_needed(item)
+            self.add_flowing_text(item, text)
+
+    def add_flowing_text(self, item, text):
         if self.is_verse_line(item):
             self.add_verse_line(item, text)
-            return
-        self.add_paragraph_line(item, text)
+        else:
+            self.add_paragraph_line(item, text)
 
     def add_item(self, item):
         kind = item['kind']
@@ -754,6 +938,8 @@ class BlockBuilder:
             self.start_chapter(item.get('title'))
         elif kind == 'note':
             self.add_note(item['t'])
+        elif kind == 'deflist':
+            self.add_definition_list(item['rows'])
         elif kind == 'break':
             self.add_break()
         elif kind != 'chapnum':
@@ -766,7 +952,7 @@ class BlockBuilder:
 
 
 def build(pages):
-    """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / break / note."""
+    """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / deflist / break / note."""
     items = build_items(pages)
     prepare_text_items(items)
     builder = BlockBuilder()

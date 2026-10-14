@@ -32,3 +32,6 @@ tessdata/
 # Local logs and temporary files
 *.log
 *.tmp
+
+*.pdf
+*.epub

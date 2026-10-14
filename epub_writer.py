@@ -11,7 +11,7 @@ from collections import Counter
 
 CFG = {}
 TITLE = AUTHOR = TRANSLATOR = PUBLISHER = ''
-CHAPTER_TITLES = ["Birinci Bölüm", "İkinci Bölüm", "Üçüncü Bölüm", "Dördüncü Bölüm", "Beşinci Bölüm"]
+LETTER_OR_APOSTROPHE = r"(?:[^\W\d_]|')"
 try:
     UTC = datetime.UTC
 except AttributeError:
@@ -32,6 +32,9 @@ FIXES = {
     'adamun': 'adamın', 'bulamiyordu': 'bulamıyordu', 's0luk': 'soluk', 'zözden': 'gözden', 'kaçmal': 'kaçmak',
     'meslekdasları': 'meslekdaşları', 
     'savaşlan': 'savaştan', 'yâpacağı': 'yapacağı', 'unutut': 'unutur', 'boişevik': 'bolşevik', 'çocugu': 'çocuğu', 'çocuklan': 'çocuklar',
+    'Değnegil': 'Değneği]',
+    'Lewestten': "Lewes'ten", 'Nighis': 'Nights', 'Fowr': 'Four', 'Lightbonse': 'Lighthouse',
+    'Dorrir': 'Dorrit', 'Anfi': 'Ant',
     
 }
 REGEX_FIXES = [
@@ -40,9 +43,34 @@ REGEX_FIXES = [
 
     (r"\.\.\s*\.", "..."),
     (r"\$", "ş"),
+    (r"\b([0-9]{1,2}) Mar[iı](?=,?\s+(Pazartesi|Salı|Çarşamba|Perşembe|Cuma|Cumartesi|Pazar)\b)", r"\1 Mart"),
+    (r"\bElekt\?ra's[ıi]m\b", "Elektra'sını"),
+    (r"\bStandar\?ta\b", "Standard'ta"),
+    (r"(?<=\w)\?(?=(?:i|ı|in|ın|un|ün|yle|de|da|te|ta)\b)", "'"),
+    (r"\bKayıp Cennetl\b", "Kayıp Cennet]"),
+    (r'\bAnny Hala["”]', "Anny Hala*"),
+    (r"\bBliss Mutluluk\|", "Bliss [Katıksız Mutluluk]"),
+    (r"\bAaron'ın Değneği\]", "Aaron'ın Değneği]"),
+    (r"\bJ\|\.T Stephen\b", "J. T. Stephen"),
+    (r"\bPYıllar\|", "[Yıllar]"),
+    (r"\bH\. \|\.", "H. J."),
+    (r"\|\. Sally", "Sally"),
+    (r"\bLefter #o a Young Poef'in\b", "Letter to a Young Poet'in"),
+    (r"\bMektupj\b", "Mektup]"),
+    (r"\bV\.?\s*Wnin\b", "V. W.'nin"),
+    (r"\bTbe\b", "The"),
+    (r"\btbe\b", "the"),
+    (r"\bibe\b", "the"),
+    (r"\bbis\b", "his"),
+    (r"(?<!\w)#be\b", "the"),
+    (r"(?<!\w)#he\b", "the"),
+    (r"\b191#te\b", "1914'te"),
+    (r"(?<!\w)#ünde\b", "4'ünde"),
+    (r"\bDorrir(?=')", "Dorrit"),
+    (r"(?<=\w)\"(?=(?:de|da|den|dan|nin|ın|in|un|ün|ye|ya|yle|te|ta|ten|tan)\b)", "'"),
     (r"(\w) (ğ\w)", r"\1\2"), (r"\bdogup\b", "doğup"),
 ]
-MARK = re.compile(r"\(\s*\*\s*[\)Y]")
+MARK = re.compile(r"\(\s*\*\s*[\)Y]|(?<=\w)\*")
 
 
 PROPER = set()
@@ -59,14 +87,25 @@ def hyphen_fix(s):
         if w[0] in 'ŞB':
             return a + 'ğ' + w[1:]
         return a + w[0].lower() + w[1:]
-    return re.sub(r"(\w+)- ([A-ZÇĞİÖŞÜ][\w']*)", rep, s)
+    return re.sub(rf"([^\W\d_]+)- ([A-ZÇĞİÖŞÜ]{LETTER_OR_APOSTROPHE}*)", rep, s)
+
+
+def fix_translation_brackets(s):
+    # OCR often reads square brackets around translated titles as (, ), | or final l.
+    translated = r"[A-ZÇĞİÖŞÜ][^()[\]{}|]{2,80}"
+    s = re.sub(rf"\(({translated})\|", r"[\1]", s)
+    s = re.sub(rf"\|({translated})\|", r"[\1]", s)
+    s = re.sub(rf"\|({translated})\)", r"[\1]", s)
+    s = re.sub(rf"\|({translated})\]", r"[\1]", s)
+    s = re.sub(rf"\(({translated})\]", r"[\1]", s)
+    return s
 
 
 def fix(s):
     for a, b in CFG.get('regex_fixes', []):
         s = re.sub(a, b, s)
     for a, b in CFG.get('fixes', {}).items():
-        s = re.sub(r'(?<![\w])' + re.escape(a) + r'(?![\w])', b, s)
+        s = re.sub(r'(?<!\w)' + re.escape(a) + r'(?!\w)', b, s)
     s = re.sub(r'(?<=[a-zçğıöşü])[01](?=[a-zçğıöşü])', lambda m: 'o' if m.group(0) == '0' else 'ı', s)
     s = re.sub(r'\b1(?=[a-zçğıöşü]{2,})', '', s)
     s = hyphen_fix(s)
@@ -75,9 +114,10 @@ def fix(s):
         w = m.group(0)
         r = FIXES.get(w)
         return r if r else w
-    s = re.sub(r"[\wÂâÎîÛû']+", rep, s)
+    s = re.sub(rf"{LETTER_OR_APOSTROPHE}+", rep, s)
     for a, b in REGEX_FIXES:
         s = re.sub(a, b, s)
+    s = fix_translation_brackets(s)
     return s
 
 
@@ -109,6 +149,10 @@ p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
 a.noteref { text-decoration: none; font-size: 0.75em; vertical-align: super; line-height: 0; }
 aside.footnote, .notes p { font-size: 0.85em; text-indent: 0; margin: 0.4em 0; }
 .notes { margin-top: 2.5em; border-top: 1px solid #999; padding-top: 0.6em; }
+.definition-list { width: 100%; border-collapse: collapse; margin: 1em 0; }
+.definition-list th, .definition-list td { padding: 0 0 0.15em 0; text-align: left; vertical-align: top; }
+.definition-list th { width: 9em; padding-right: 1em; font-weight: normal; white-space: nowrap; }
+.definition-list td { hyphens: auto; -webkit-hyphens: auto; }
 .title-page { text-align: center; }
 .title-page h1 { font-size: 1.8em; margin-top: 30%; }
 .title-page p { text-align: center; text-indent: 0; margin: 0.4em 0; }
@@ -154,12 +198,13 @@ def split_chapters(blocks):
     return chapters, titles
 
 
-def chapter_title(titles, ci):
-    if titles[ci]:
-        return titles[ci]
-    if ci < len(CHAPTER_TITLES):
-        return CHAPTER_TITLES[ci]
-    return f'{ci + 1}. Bölüm'
+def fallback_chapter_label(chapter, ci):
+    for block in chapter:
+        if block[0] == 'verse' and block[1]:
+            return fix(block[1][0])
+        if block[0] == 'p' and block[1].strip():
+            return fix(block[1].strip()[:60])
+    return f'Metin {ci + 1}'
 
 
 def append_paragraph(parts, pending, text):
@@ -176,6 +221,13 @@ def append_verse(parts, block):
     cls = 'epigraph' if block[2] == 'epigraph' else 'verse'
     lines = ''.join(f'<p>{esc(fix(line))}</p>' for line in block[1])
     parts.append(f'<div class="{cls}">{lines}</div>')
+
+
+def append_definition_list(parts, block):
+    rows = []
+    for term, desc in block[1]:
+        rows.append(f'<tr><th scope="row">{esc(fix(term))}</th><td>{esc(fix(desc))}</td></tr>')
+    parts.append('<table class="definition-list"><tbody>' + ''.join(rows) + '</tbody></table>')
 
 
 def append_break(parts):
@@ -201,6 +253,8 @@ def render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_
             append_paragraph(parts, pending, block[1])
         elif kind == 'verse':
             append_verse(parts, block)
+        elif kind == 'deflist':
+            append_definition_list(parts, block)
         elif kind == 'break':
             append_break(parts)
         elif kind == 'end':
@@ -211,7 +265,7 @@ def render_chapter_blocks(chapter, parts, pending, notes_html, chap_notes, note_
 
 
 def replace_note_markers(body, pending, chap_notes, chapter_no):
-    if len(chap_notes) != len(pending):
+    if CFG.get('verbose') and len(chap_notes) != len(pending):
         print('UYARI: bölüm', chapter_no, 'işaret', len(pending), 'not', len(chap_notes))
     for i, n in enumerate(chap_notes[:len(pending)]):
         pending[i] = n
@@ -227,8 +281,8 @@ def remove_trailing_breaks(body):
     return body
 
 
-def render_chapter(ci, chapter, title, note_no):
-    parts = [f'<h1 id="b{ci + 1}">{esc(title)}</h1>']
+def render_chapter(ci, chapter, title, nav_label, note_no):
+    parts = [f'<h1 id="b{ci + 1}">{esc(title)}</h1>'] if title else []
     pending = []
     notes_html = []
     chap_notes = []
@@ -237,14 +291,16 @@ def render_chapter(ci, chapter, title, note_no):
     body = remove_trailing_breaks(body)
     if notes_html:
         body += '\n<section class="notes" epub:type="footnotes">\n' + '\n'.join(notes_html) + '\n</section>'
-    return (f'chapter{ci + 1}.xhtml', title, page_xhtml(title, body)), note_no
+    return (f'chapter{ci + 1}.xhtml', nav_label, page_xhtml(nav_label, body)), note_no
 
 
 def render_chapters(chapters, titles):
     note_no = 0
     files = []
     for ci, chapter in enumerate(chapters):
-        rendered, note_no = render_chapter(ci, chapter, chapter_title(titles, ci), note_no)
+        title = titles[ci]
+        nav_label = title or fallback_chapter_label(chapter, ci)
+        rendered, note_no = render_chapter(ci, chapter, title, nav_label, note_no)
         files.append(rendered)
     return files, note_no
 
