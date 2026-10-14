@@ -35,6 +35,13 @@ JUNK_TOKEN_CHARS = set('|İ![]{}')
 BAD_GAP_CHARS = set('<>»«|—')
 GAP_TRAILING_CHARS = set('.,!?;:"\'')
 ODD_APOSTROPHE_SUFFIX = re.compile(r"\b[^\W\d_]+['’][bcçdfgğhjklmnprsştvyz]{3,}\b", re.IGNORECASE)
+SUSPICIOUS_TEXT_LAYER_WORD = re.compile(
+    r"\b[^\W\d_]*(?:oı|ie|lcr|rnı|ıı|umı|tcı|teı|kcn|ktc|dck|eiy|vann|eeli|dalzi|"
+    r"lc\b|lc(?=[^aeıioöuü])|lci|tck|nıa|dc\b|dc(?=[^aeıioöuü])|ysc\b|okyar|"
+    r"sorn|yanıyar|pcn|ınaj|kraliyer|gcl|huyur|görscl|güvcrt|karavc|kümcs|"
+    r"beccr|cialm|kişncy|elelen|lerele|geele|tavt)[^\W\d_]*\b",
+    re.IGNORECASE,
+)
 
 
 def successive_pairs(iterable: Iterable[T]) -> Iterator[tuple[T, T]]:
@@ -110,7 +117,9 @@ def clean_reference_line(t):
 def text_badness(t):
     score = 0
     score += 3 * len(re.findall(r"[#|�]", t))
+    score += 3 * len(re.findall(r"[^\W\d_]+\d+[^\W\d_]+", t))
     score += 4 * len(ODD_APOSTROPHE_SUFFIX.findall(tr_lower(t)))
+    score += 3 * len(SUSPICIOUS_TEXT_LAYER_WORD.findall(tr_lower(t)))
     score += 2 * len(re.findall(r"\b\w+\?+\w+\b", t))
     score += abs(t.count('[') - t.count(']'))
     score += abs(t.count('(') - t.count(')'))
@@ -149,13 +158,29 @@ def apply_reference_text(lines, page_name):
     ref_lines = REFERENCE_LINES.get(os.path.basename(page_name), [])
     if ref_lines:
         ref_index = 0
+        previous_text = ''
         for line in lines:
             if line['kind'] not in {'text', 'break'}:
+                previous_text = line.get('t', '')
                 continue
             ref, ref_index = best_reference_match(line['t'], ref_lines, ref_index)
-            if ref:
+            if ref and not hyphen_continuation_conflicts(previous_text, line['t'], ref):
                 line['t'] = ref
+            previous_text = line['t']
     return lines
+
+
+def first_word(text):
+    match = re.search(r"[^\W\d_]+", text, re.UNICODE)
+    return tr_lower(match.group(0)) if match else ''
+
+
+def hyphen_continuation_conflicts(previous_text, ocr_text, ref_text):
+    if not re.search(r"[^\W\d_]-$", previous_text.strip()):
+        return False
+    ocr_first = first_word(ocr_text)
+    ref_first = first_word(ref_text)
+    return bool(ocr_first and ref_first and ocr_first != ref_first)
 
 
 def detect_headers(files):

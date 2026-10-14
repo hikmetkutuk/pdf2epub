@@ -275,6 +275,24 @@ def is_front_or_back_matter(tsv):
     return toc >= 4 and toc >= 0.5 * len(satirlar)
 
 
+def ocr_quality_stats(tsv):
+    words = [word for line in structure.read_lines(tsv) for word in line['words']]
+    if not words:
+        return 0, 0, 0
+    good_words = 0
+    for word in words:
+        letters = re.sub(r'[^A-Za-zÇĞİÖŞÜçğıöşü]', '', word['t'])
+        if word['c'] >= 50 and len(letters) >= 2:
+            good_words += 1
+    avg_conf = sum(word['c'] for word in words) / len(words)
+    return len(words), avg_conf, good_words / len(words)
+
+
+def is_noisy_ocr_page(tsv):
+    word_count, avg_conf, good_ratio = ocr_quality_stats(tsv)
+    return 0 < word_count < 45 and avg_conf < 50 and good_ratio < 0.35
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description='Taranmış Türkçe kitap PDF\'ini EPUB\'a çevirir.')
     ap.add_argument('pdf', help='PDF dosyası')
@@ -357,15 +375,38 @@ def text_files_from_ocr(names, tsv_dir):
 def filter_non_text_pages(files):
     bas, son = max(3, int(len(files) * 0.12)), max(2, int(len(files) * 0.05))
     dropped = [f for i, f in enumerate(files) if (i < bas or i >= len(files) - son) and is_front_or_back_matter(f)]
+    noisy = [f for f in files if f not in dropped and is_noisy_ocr_page(f)]
     if dropped:
         print('  metin dışı sayfalar atlandı (künye/içindekiler/arka kapak): ' +
               ', '.join(os.path.basename(f)[2:-4].lstrip('0') for f in dropped))
-    return [f for f in files if f not in dropped]
+    if noisy:
+        print('  gürültülü OCR sayfaları atlandı (resim/faksimile): ' +
+              ', '.join(os.path.basename(f)[2:-4].lstrip('0') for f in noisy))
+    return [f for f in files if f not in dropped and f not in noisy]
 
 
 def page_number_from_file(path):
     match = re.search(r'p-(\d+)', os.path.basename(path))
     return int(match.group(1)) if match else None
+
+
+def merge_dropcap_reference_lines(lines):
+    merged = []
+    pending = ''
+    for line in lines:
+        if pending:
+            if line[:1].islower():
+                merged.append(pending + line)
+            else:
+                merged.extend((pending, line))
+            pending = ''
+        elif len(line) == 1 and line.isalpha() and line.isupper():
+            pending = line
+        else:
+            merged.append(line)
+    if pending:
+        merged.append(pending)
+    return merged
 
 
 def pdf_reference_lines(doc, files):
@@ -376,6 +417,7 @@ def pdf_reference_lines(doc, files):
             continue
         lines = [structure.clean_reference_line(line) for line in doc[page_no - 1].get_text().splitlines()]
         lines = [line for line in lines if line]
+        lines = merge_dropcap_reference_lines(lines)
         if lines:
             references[os.path.basename(path)] = lines
     return references
