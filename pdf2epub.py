@@ -460,6 +460,59 @@ def pdf_text_layer_quality(doc, files, threshold=0.02):
     return (text_layer if ratio < threshold else {}), text_layer, ratio
 
 
+def is_illustration(page, words, info):
+    """Yeterince büyük, tam sayfa olmayan ve üzerinde metin katmanı sözcüğü bulunmayan resim."""
+    rect = fitz.Rect(info['bbox'])
+    if rect.width < 80 or rect.height < 50 or not info.get('xref'):
+        return False
+    if rect.width * rect.height > 0.5 * page.rect.width * page.rect.height:
+        return False
+    return sum(1 for w in words if fitz.Rect(w[:4]).intersects(rect)) <= 8
+
+
+def save_illustration(doc, xref, dest):
+    pix = fitz.Pixmap(doc, xref)
+    if pix.n - pix.alpha > 3 or pix.colorspace is None:
+        pix = fitz.Pixmap(fitz.csRGB, pix)
+    pix.save(dest)
+
+
+def page_illustrations(doc, no, out_dir):
+    """Sayfadaki çizimleri kaydeder: [(dikey_oran, dosya_yolu)]."""
+    page = doc[no - 1]
+    words = page.get_text('words')
+    found = []
+    for k, info in enumerate(page.get_image_info(xrefs=True)):
+        if not is_illustration(page, words, info):
+            continue
+        dest = os.path.join(out_dir, f'p-{no:04d}-{k}.png')
+        save_illustration(doc, info['xref'], dest)
+        found.append(((info['bbox'][1] + info['bbox'][3]) / 2 / page.rect.height, dest))
+    return found
+
+
+def extract_illustrations(doc, files, out_dir):
+    """Metin sayfalarındaki çizimleri çıkarır: {sayfa_adı: [(dikey_oran, dosya_yolu)]}."""
+    os.makedirs(out_dir, exist_ok=True)
+    found = {}
+    for path in files:
+        no = page_number_from_file(path)
+        if not no or no > len(doc):
+            continue
+        items = page_illustrations(doc, no, out_dir)
+        if items:
+            found[os.path.basename(path)[:-4]] = items
+    return found
+
+
+def attach_illustrations(pages, illustrations):
+    for pg in pages:
+        found = illustrations.get(os.path.basename(pg['name'])[:-4], [])
+        pg['illus'] = [(frac * pg['page_h'], src) for frac, src in found]
+    if illustrations:
+        print(f'  {sum(len(v) for v in illustrations.values())} çizim bulundu')
+
+
 def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
     structure.IMG_DIR = img_dir
     structure.TESSERACT = tess
@@ -479,6 +532,9 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
     if reference:
         structure.VOCAB.update(structure.build_vocab(files))
     structure.NOTE_ID[0] = 0
+    illustrations = {}
+    if doc is not None:
+        illustrations = extract_illustrations(doc, files, os.path.join(os.path.dirname(img_dir), 'illus'))
     if ratio is not None:
         if reference:
             print(f"  PDF metin katmanı güvenilir (uyuşmazlık %{100 * ratio:.1f}): OCR'ın emin olmadığı kelimelerde kullanılacak")
@@ -491,6 +547,7 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
             print(message)
     structure.HEADERS[:] = structure.detect_headers(files)
     pages = [p for p in (structure.page(f) for f in files) if p]
+    attach_illustrations(pages, illustrations)
     structure.normalize(pages)
     return structure.build(pages)
 

@@ -10,6 +10,7 @@ import zipfile
 from collections import Counter
 
 CFG = {}
+IMAGES = {}  # çizim dosyası yolu -> EPUB içindeki dosya adı
 TITLE = AUTHOR = TRANSLATOR = PUBLISHER = ''
 OEBPS_DIR = 'OEBPS/'
 LETTER_OR_APOSTROPHE = r"(?:[^\W\d_]|')"
@@ -178,6 +179,8 @@ p { margin: 0; text-indent: 1.5em; text-align: justify; hyphens: auto; -webkit-h
 p.date { text-align: right; text-indent: 0; font-style: italic; margin: 1.6em 0 0.6em; }
 p.date + p { text-indent: 0; }
 p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
+.illus { text-align: center; margin: 1em 0; text-indent: 0; page-break-inside: avoid; }
+.illus img { max-width: 100%; max-height: 90vh; }
 .break { text-align: center; margin: 1.2em 0; text-indent: 0; letter-spacing: 0.5em; }
 .verse { margin: 0.9em 0 0.9em 2em; font-style: italic; }
 .verse p, .epigraph p { text-indent: 0; text-align: left; }
@@ -215,6 +218,7 @@ def setup_book(cfg, blocks):
     TRANSLATOR = cfg.get('translator', '')
     PUBLISHER = cfg.get('publisher', '')
     PROPER.clear()
+    IMAGES.clear()
     alltxt = ' '.join(b[1] for b in blocks if b[0] == 'p')
     caps = Counter(re.findall(r"(?<=[a-zçğıöşü,;] )([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)", alltxt))
     PROPER.update(w for w, n in caps.items() if n >= 2)
@@ -303,6 +307,8 @@ def render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_n
             append_definition_list(parts, block)
         elif kind == 'break':
             append_break(parts)
+        elif kind == 'img':
+            parts.append(f'<div class="illus"><img src="images/{IMAGES.setdefault(block[1], f"illus{len(IMAGES) + 1:03d}.jpg")}" alt=""/></div>')
         elif kind == 'end':
             parts.append('<p class="end">SON</p>')
         elif kind == 'date':
@@ -395,6 +401,8 @@ def build_manifest_and_spine(files):
                 '<item id="cover-img" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>',
                 '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>',
                 '<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>']
+    manifest += [f'<item id="img{i + 1}" href="images/{name}" media-type="image/jpeg"/>'
+                 for i, name in enumerate(IMAGES.values())]
     spine = ['<itemref idref="cover" linear="yes"/>', '<itemref idref="title"/>']
     for i, (f, _, _) in enumerate(files):
         manifest.append(f'<item id="c{i + 1}" href="{f}" media-type="application/xhtml+xml"/>')
@@ -429,6 +437,14 @@ def build_container():
 <rootfiles><rootfile full-path="{OEBPS_DIR}content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'''
 
 
+def illustration_bytes(path):
+    im = load_image(path).convert('L')
+    im.thumbnail((1000, 1400))
+    buf = io.BytesIO()
+    im.save(buf, 'JPEG', quality=85)
+    return buf.getvalue()
+
+
 def write_epub(out, files, content):
     with zipfile.ZipFile(out, 'w') as z:
         z.writestr(zipfile.ZipInfo('mimetype'), 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
@@ -442,6 +458,8 @@ def write_epub(out, files, content):
         z.writestr(OEBPS_DIR + 'title.xhtml', content['title_page'], zipfile.ZIP_DEFLATED)
         for f, _, x in files:
             z.writestr(OEBPS_DIR + f, x, zipfile.ZIP_DEFLATED)
+        for path, name in IMAGES.items():
+            z.writestr(OEBPS_DIR + 'images/' + name, illustration_bytes(path), zipfile.ZIP_STORED)
 
 
 def html_member_names(z):

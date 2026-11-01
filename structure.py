@@ -947,7 +947,11 @@ def remove_repeated_page_title(body, current_title):
 
 
 def page_starts_chapter(page, page_title):
-    return bool(page_title) or (page['first_y'] > page['page_h'] * 0.35 and len(page['body']) > 3)
+    if page_title:
+        return True
+    if page.get('illus'):  # çizimin yarattığı üst boşluk bölüm başı sayılmaz
+        return False
+    return page['first_y'] > page['page_h'] * 0.35 and len(page['body']) > 3
 
 
 def body_for_items(page, page_title, current_title):
@@ -963,6 +967,23 @@ def append_body_items(items, body, chapter_start):
         return
     for i, d in enumerate(body):
         items.append({**d, 'page_first': i == 0, 'chap': chapter_start})
+
+
+def append_page_content(items, body, chapter_start, illus):
+    """Sayfadaki çizimleri, dikey konumlarına göre metin satırlarının arasına koyar."""
+    if not illus:
+        append_body_items(items, body, chapter_start)
+        return
+    rest = body
+    for y, src in sorted(illus):
+        before = [d for d in rest if d['y'] < y]
+        rest = rest[len(before):]
+        if before:
+            append_body_items(items, before, chapter_start)
+            chapter_start = False
+        items.append({'kind': 'image', 'src': src})
+    if rest:
+        append_body_items(items, rest, chapter_start)
 
 
 def append_note_items(items, notes):
@@ -1043,7 +1064,7 @@ def build_items(pages):
                 current_title = page_title
             items.append({'kind': 'chapter', 'title': page_title})
         body = recover_side_label_lists(body_for_items(pg, page_title, current_title))
-        append_body_items(items, body, chapter_start)
+        append_page_content(items, body, chapter_start, pg.get('illus') or [])
         append_note_items(items, pg['notes'])
     return items
 
@@ -1280,6 +1301,13 @@ class BlockBuilder:
         self.blocks.append(('deflist', rows))
         self.prev = None
 
+    def add_image(self, src):
+        self.flush()
+        self.flush_verse(self.verse_class())
+        self.blocks.append(('img', src))
+        self.in_epigraph = False
+        self.prev = None
+
     def add_break(self):
         self.flush()
         self.flush_verse(self.verse_class())
@@ -1384,6 +1412,8 @@ class BlockBuilder:
             self.add_definition_list(item['rows'])
         elif kind == 'break':
             self.add_break()
+        elif kind == 'image':
+            self.add_image(item['src'])
         elif kind != 'chapnum':
             self.add_text(item)
 
