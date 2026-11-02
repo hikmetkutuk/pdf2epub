@@ -122,7 +122,7 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 
 **Fazladan ya da eksik bir sayfa varsa:** Ön söz, yazar tanıtımı ya da reklam sayfası gibi istemediğiniz sayfaları `--skip` ile çıkarın. Ardından tekrar çalıştırın; tekrar çalıştırmak hızlıdır.
 
-**Sık tekrarlanan bir OCR hatası varsa:** Bir metin dosyası oluşturun (klasördeki `sample_corrections.json` örnek olarak kullanılabilir):
+**Sık tekrarlanan bir OCR hatası varsa:** Bir metin dosyası oluşturun (`configs/sample.json` örnek olarak kullanılabilir):
 
 ```json
 {
@@ -135,22 +135,22 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 
 **Resimler ve çizimler:** Metin sayfalarının içindeki çizimler (üzerinde yazı olmayan, tam sayfa olmayan resimler) otomatik olarak alınır ve sayfadaki konumlarına yerleştirilir.
 
-**Bölüm başlıkları:** Başlıklar sayfa ortasında geçiyorsa ya da OCR bozuyorsa `--config` dosyasına şunları ekleyin. `headings` OCR hatalarına karşı bulanık eşleşir, `heading_patterns` düzenli ifadedir. Numaralı başlıklarda OCR'ın yanlış okuduğu numara ardışıklığa göre düzeltilir. Örnek: `abd_1919_config.json`. İçindekiler sayfalarını da `--skip` ile çıkarın.
+**Bölüm başlıkları:** Başlıklar sayfa ortasında geçiyorsa ya da OCR bozuyorsa `--config` dosyasına şunları ekleyin. `headings` OCR hatalarına karşı bulanık eşleşir, `heading_patterns` düzenli ifadedir. Numaralı başlıklarda OCR'ın yanlış okuduğu numara ardışıklığa göre düzeltilir. Örnek: `configs/abd_1919.json`. İçindekiler sayfalarını da `--skip` ile çıkarın.
 
 ```json
 {"headings": ["Hovarda", "Joe Williams"], "heading_patterns": ["(?i)haber-?film\\s*\\d+"]}
 ```
 
-**Şiir kitapları:** `--verse` ile çalıştırın. Sayfa altındaki küçük puntolu numaralı dipnotlar dipnota çevrilir, OCR'ın düşürdüğü şiir numaraları ardışıklıktan tamamlanır. Şiir kipinde düzyazı kalması gereken sayfaları (önsöz gibi) config dosyasında `"prose_pages": "7-10"` ile belirtin. Örnek: `oda_muzigi_config.json`.
+**Şiir kitapları:** `--verse` ile çalıştırın. Sayfa altındaki küçük puntolu numaralı dipnotlar dipnota çevrilir, OCR'ın düşürdüğü şiir numaraları ardışıklıktan tamamlanır. Şiir kipinde düzyazı kalması gereken sayfaları (önsöz gibi) config dosyasında `"prose_pages": "7-10"` ile belirtin. Örnek: `configs/oda_muzigi.json`.
 
 ```
-python pdf2epub.py kitap.pdf --lang tur+eng --verse --config oda_muzigi_config.json --skip 2-6
+python pdf2epub.py kitap.pdf --lang tur+eng --verse --config configs/oda_muzigi.json --skip 2-6
 ```
 
-**Oyun metinleri:** `--play` ile çalıştırın. Düzeltilmesi gereken OCR hatalarını config dosyasında `regex_fixes` ile verebilirsiniz. Örnek: `marti_config.json`.
+**Oyun metinleri:** `--play` ile çalıştırın. Düzeltilmesi gereken OCR hatalarını config dosyasında `regex_fixes` ile verebilirsiniz. Örnekler: `configs/marti.json`, `configs/vanya.json`.
 
 ```
-python pdf2epub.py oyun.pdf --play --skip 2-5 --config marti_config.json
+python pdf2epub.py oyun.pdf --play --skip 2-5 --config configs/marti.json
 ```
 
 **Kindle'a göndermek:** EPUB'ı "Send to Kindle" (uygulama ya da e-posta) ile gönderebilirsiniz, Amazon kendisi dönüştürür.
@@ -173,10 +173,10 @@ python pdf2epub.py oyun.pdf --play --skip 2-5 --config marti_config.json
 - `epub_writer.py`: EPUB 3 dosyasını yazar (içindekiler, kapak, dipnotlar, Türkçe yazım düzeltmeleri).
 - `convert.bat`: Windows'ta sürükle-bırak ile çalıştırma.
 - `play.py`: Oyun metni kipi (konuşmacı, diyalog, sahne yönergesi, perdeler).
-- `marti_config.json`: Oyun config örneği (A. Çehov, Martı).
+- `configs/`: Kitaba özel ayar dosyaları (`--config` ile verilir). Oyun örnekleri: `marti.json`, `vanya.json`.
 - `verse.py`: Şiir kitabı kipi (şiir başlıkları, iki dilli sayfalar, numaralı dipnotlar).
-- `oda_muzigi_config.json`: Şiir kitabı config örneği (James Joyce, Oda Müziği).
-- `abd_1919_config.json`: Bölüm başlıkları örneği (John Dos Passos, A.B.D. II: 1919).
-- `sample_corrections.json`: Kitaba özel düzeltme dosyası örneği.
-- `saramago_corrections.json`, `woolf_diary_corrections.json`: Genel koda gömülmeyen kitap özel düzeltme örnekleri.
+- `configs/oda_muzigi.json`: Şiir kitabı config örneği (James Joyce, Oda Müziği).
+- `configs/abd_1919.json`: Bölüm başlıkları örneği (John Dos Passos, A.B.D. II: 1919).
+- `configs/sample.json`: Kitaba özel düzeltme dosyası örneği.
+- `configs/saramago.json`, `configs/woolf_diary.json`: Genel koda gömülmeyen kitap özel düzeltme örnekleri.
 - `requirements.txt`: Gerekli Python kütüphaneleri.
