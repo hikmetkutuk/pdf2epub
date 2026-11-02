@@ -1,0 +1,112 @@
+{
+ "prose_pages": "7-10",
+ "headings": [
+  "Sanatçının Bir Şair Olarak Portresi"
+ ],
+ "regex_fixes": [
+  [
+   "Tutto & sciolto",
+   "Tutto è sciolto"
+  ],
+  [
+   "\\bisin\\b",
+   "is in"
+  ],
+  [
+   "courteousiy",
+   "courteously"
+  ],
+  [
+   "\\bthcir\\b",
+   "their"
+  ],
+  [
+   "true-bom",
+   "true-born"
+  ],
+  [
+   "\\bdoa\\b",
+   "do a"
+  ],
+  [
+   "\\bkitabindan\\b",
+   "kitabından"
+  ],
+  [
+   "\\byazmışur\\b",
+   "yazmıştır"
+  ],
+  [
+   "\\bsık sik\\b",
+   "sık sık"
+  ],
+  [
+   "\\bgörüldügü\\b",
+   "görüldüğü"
+  ],
+  [
+   "\\bcol bilinir\\b",
+   "çok bilinir"
+  ],
+  [
+   "\\boynaıuruştır\\b",
+   "oynanmıştır"
+  ],
+  [
+   "\\baglamakli\\b",
+   "ağlamaklı"
+  ],
+  [
+   "\\balunda\\b",
+   "altında"
+  ],
+  [
+   "\\bbirleşürebilmesiyle\\b",
+   "birleştirebilmesiyle"
+  ],
+  [
+   "\\bboşanmakistediğinde\\b",
+   "boşanmak istediğinde"
+  ],
+  [
+   "\\bevlibir\\b",
+   "evli bir"
+  ],
+  [
+   "\\bigenlerden\\b",
+   "içenlerden"
+  ],
+  [
+   "\\bkonusan\\b",
+   "konuşan"
+  ],
+  [
+   "\\bkonustugu\\b",
+   "konuştuğu"
+  ],
+  [
+   "\\bkurnpanyasından\\b",
+   "kumpanyasından"
+  ],
+  [
+   "\\bmatbaarnın\\b",
+   "matbaanın"
+  ],
+  [
+   "\\boldugunu\\b",
+   "olduğunu"
+  ],
+  [
+   "\\bsacfileni\\b",
+   "saçfileni"
+  ],
+  [
+   "\\btirenlerini\\b",
+   "trenlerini"
+  ],
+  [
+   "\\bürkeğim\\b",
+   "yüreğim"
+  ]
+ ]
+}

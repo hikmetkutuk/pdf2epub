@@ -106,6 +106,8 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 | `--cover-page 1` | Kapak resmi olarak kullanılacak PDF sayfası (varsayılan 1) |
 | `--output path.epub` | EPUB'ın kaydedileceği yer |
 | `--config corrections.json` | Kitaba özel yazım düzeltmeleri ve bölüm başlıkları (aşağıya bakın) |
+| `--lang tur+eng` | OCR dili. İki dilli kitaplarda `tur+eng` (varsayılan: `tur`) |
+| `--verse` | Şiir kitabı kipi: her satır bir dize, her şiir bir bölüm, iki dilli sayfalarda İngilizce dizeler ayrı biçimlenir |
 | `--dpi 400` | Görüntü çözünürlüğü (varsayılan: otomatik) |
 | `--jobs 4` | Aynı anda kaç sayfa OCR edilsin (varsayılan: işlemci sayısı - 1) |
 | `--force` | Ara dosyaları silip her şeyi baştan yapar |
@@ -138,6 +140,12 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 {"headings": ["Hovarda", "Joe Williams"], "heading_patterns": ["(?i)haber-?film\\s*\\d+"]}
 ```
 
+**Şiir kitapları:** `--verse` ile çalıştırın. Sayfa altındaki küçük puntolu numaralı dipnotlar dipnota çevrilir, OCR'ın düşürdüğü şiir numaraları ardışıklıktan tamamlanır. Şiir kipinde düzyazı kalması gereken sayfaları (önsöz gibi) config dosyasında `"prose_pages": "7-10"` ile belirtin. Örnek: `oda_muzigi_config.json`.
+
+```
+python pdf2epub.py kitap.pdf --lang tur+eng --verse --config oda_muzigi_config.json --skip 2-6
+```
+
 **Kindle'a göndermek:** EPUB'ı "Send to Kindle" (uygulama ya da e-posta) ile gönderebilirsiniz, Amazon kendisi dönüştürür.
 
 ---
@@ -157,6 +165,8 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 - `structure.py`: OCR çıktısından kitap yapısını kurar (paragraf, bölüm, şiir, dipnot, sahne).
 - `epub_writer.py`: EPUB 3 dosyasını yazar (içindekiler, kapak, dipnotlar, Türkçe yazım düzeltmeleri).
 - `convert.bat`: Windows'ta sürükle-bırak ile çalıştırma.
+- `verse.py`: Şiir kitabı kipi (şiir başlıkları, iki dilli sayfalar, numaralı dipnotlar).
+- `oda_muzigi_config.json`: Şiir kitabı config örneği (James Joyce, Oda Müziği).
 - `abd_1919_config.json`: Bölüm başlıkları örneği (John Dos Passos, A.B.D. II: 1919).
 - `sample_corrections.json`: Kitaba özel düzeltme dosyası örneği.
 - `saramago_corrections.json`, `woolf_diary_corrections.json`: Genel koda gömülmeyen kitap özel düzeltme örnekleri.

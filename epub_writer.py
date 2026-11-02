@@ -183,7 +183,8 @@ p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
 .illus img { max-width: 100%; max-height: 90vh; }
 .break { text-align: center; margin: 1.2em 0; text-indent: 0; letter-spacing: 0.5em; }
 .verse { margin: 0.9em 0 0.9em 2em; font-style: italic; }
-.verse p, .epigraph p { text-indent: 0; text-align: left; }
+.verse-en { margin: 0.9em 0 0.9em 2em; font-style: normal; color: #444; }
+.verse-en p, .verse p, .epigraph p { text-indent: 0; text-align: left; }
 .epigraph { margin: 1em 10% 2.2em; font-style: italic; text-align: center; }
 .epigraph p { text-align: center; }
 .end { text-align: center; margin-top: 2em; text-indent: 0; letter-spacing: 0.2em; }
@@ -265,10 +266,11 @@ def append_paragraph(parts, text, note_numbers):
 
 
 def append_verse(parts, block, note_numbers):
-    cls = 'epigraph' if block[2] == 'epigraph' else 'verse'
+    cls = block[2] if block[2] in ('epigraph', 'verse-en') else 'verse'
+    attrs = ' xml:lang="en" lang="en"' if cls == 'verse-en' else ''
     link = note_linker(note_numbers)
     lines = ''.join(f'<p>{TOKEN.sub(link, esc(fix(line)))}</p>' for line in block[1])
-    parts.append(f'<div class="{cls}">{lines}</div>')
+    parts.append(f'<div class="{cls}"{attrs}>{lines}</div>')
 
 
 def append_definition_list(parts, block):
@@ -307,6 +309,8 @@ def render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_n
             append_definition_list(parts, block)
         elif kind == 'break':
             append_break(parts)
+        elif kind == 'subhead':
+            parts.append(f'<h2>{TOKEN.sub(note_linker(note_numbers), esc(fix(block[1])))}</h2>')
         elif kind == 'img':
             parts.append(f'<div class="illus"><img src="images/{IMAGES.setdefault(block[1], f"illus{len(IMAGES) + 1:03d}.jpg")}" alt=""/></div>')
         elif kind == 'end':
@@ -337,21 +341,26 @@ def render_chapter(ci, chapter, title, nav_label, note_numbers, referenced_notes
 def collect_note_links(blocks):
     note_numbers = {}
     referenced_notes = set()
+    first = 0
     for block in blocks:
+        if block[0] == 'chapter' and CFG.get('notes_per_chapter'):
+            first = len(note_numbers)  # şiir kitaplarında dipnot numaraları her şiirde yeniden başlar
         if block[0] == 'note' and len(block) > 2 and block[2] is not None:
-            note_numbers[block[2]] = len(note_numbers) + 1
+            note_numbers[block[2]] = len(note_numbers) + 1 - first
         if block[0] == 'p':
             referenced_notes.update(int(match) for match in TOKEN.findall(block[1]))
         elif block[0] == 'verse':
             for line in block[1]:
                 referenced_notes.update(int(match) for match in TOKEN.findall(line))
+        elif block[0] == 'subhead':
+            referenced_notes.update(int(match) for match in TOKEN.findall(block[1]))
     return note_numbers, referenced_notes
 
 
 def render_chapters(chapters, titles, note_numbers, referenced_notes):
     files = []
     for ci, chapter in enumerate(chapters):
-        title = titles[ci]
+        title = fix(titles[ci]) if titles[ci] else titles[ci]
         nav_label = title or fallback_chapter_label(chapter, ci)
         files.append(render_chapter(ci, chapter, title, nav_label, note_numbers, referenced_notes))
     return files

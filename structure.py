@@ -104,6 +104,7 @@ def letters(t):
 
 
 HEADERS = []
+VERSE_MODE = False  # şiir kitabı kipi (verse.py)
 HEADING_TITLES = []    # kitaba özel bölüm başlıkları (config: "headings"); OCR hatalarına karşı bulanık eşleşir
 HEADING_PATTERNS = []  # kitaba özel başlık düzenli ifadeleri (config: "heading_patterns")
 
@@ -1311,6 +1312,7 @@ class BlockBuilder:
         self.prev = None
         self.verse_buf: list = []
         self.in_epigraph = False
+        self.lang = None
 
     def flush(self):
         if self.cur:
@@ -1319,6 +1321,7 @@ class BlockBuilder:
 
     def flush_verse(self, cls):
         if self.verse_buf:
+            cls = 'verse-en' if cls == 'verse' and self.lang == 'en' else cls
             self.blocks.append(('verse', [clean_text(v) for v in self.verse_buf], cls))
         self.verse_buf = []
 
@@ -1335,7 +1338,7 @@ class BlockBuilder:
         if self.blocks and self.blocks[-1] == ('chapter', title):
             return  # aynı başlık art arda iki kez okunmuş
         self.blocks.append(('chapter', title))
-        self.in_epigraph = True
+        self.in_epigraph = not VERSE_MODE
         self.prev = None
 
     def add_note(self, text, note_id=None):
@@ -1356,6 +1359,18 @@ class BlockBuilder:
         self.flush()
         self.flush_verse(self.verse_class())
         self.blocks.append(('deflist', rows))
+        self.prev = None
+
+    def add_subhead(self, text):
+        self.flush()
+        self.flush_verse(self.verse_class())
+        self.blocks.append(('subhead', text))
+        self.prev = None
+
+    def set_lang(self, lang):
+        self.flush()
+        self.flush_verse(self.verse_class())
+        self.lang = lang
         self.prev = None
 
     def add_image(self, src):
@@ -1471,6 +1486,10 @@ class BlockBuilder:
             self.add_break()
         elif kind == 'image':
             self.add_image(item['src'])
+        elif kind == 'subhead':
+            self.add_subhead(item['t'])
+        elif kind == 'lang':
+            self.set_lang(item['lang'])
         elif kind != 'chapnum':
             self.add_text(item)
 

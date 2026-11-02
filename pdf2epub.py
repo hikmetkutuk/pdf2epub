@@ -44,7 +44,7 @@ epub_writer: Any = None
 
 # ---------------------------------------------------------------- bağımlılıklar
 def load_dependencies():
-    global fitz, np, Image, structure, epub_writer
+    global fitz, np, Image, structure, epub_writer, verse
     try:
         _fitz = importlib.import_module('pymupdf')  # PyMuPDF >= 1.24
     except ImportError:
@@ -61,6 +61,7 @@ def load_dependencies():
     _structure = importlib.import_module('structure')
     _epub_writer = importlib.import_module('epub_writer')
 
+    verse = importlib.import_module('verse')
     fitz = _fitz
     np = _np
     Image = _Image
@@ -88,17 +89,20 @@ def find_tesseract(manual_path=None):
          "(ya da yolunu --tesseract ile verin).")
 
 
-def tessdata_args(tess):
-    """Türkçe dil dosyasını bul. Yoksa script klasöründeki tessdata/ klasörüne bakar."""
+def tessdata_args(tess, lang='tur'):
+    """Dil dosyalarını bul. Yoksa script klasöründeki tessdata/ klasörüne bakar."""
+    gerekli = lang.split('+')
     yerel = os.path.join(HERE, 'tessdata')
-    if os.path.isfile(os.path.join(yerel, 'tur.traineddata')):
+    if all(os.path.isfile(os.path.join(yerel, f'{d}.traineddata')) for d in gerekli):
         return ['--tessdata-dir', yerel]
     out = subprocess.run([tess, '--list-langs'], capture_output=True, text=True,
                          encoding='utf-8', errors='replace', check=False)
-    if 'tur' in (out.stdout + out.stderr).split():
+    kurulu = (out.stdout + out.stderr).split()
+    eksik = [d for d in gerekli if d not in kurulu]
+    if not eksik:
         return []
-    fail("Tesseract'ta Türkçe dil paketi (tur) yok.\n"
-         "Çözüm: tur.traineddata dosyasını indirip bu klasördeki 'tessdata' klasörüne koyun\n"
+    fail(f"Tesseract'ta dil paketi yok: {', '.join(eksik)}.\n"
+         "Çözüm: <dil>.traineddata dosyasını indirip bu klasördeki 'tessdata' klasörüne koyun\n"
          "(README.md > 'Türkçe dil paketi').")
 
 
@@ -226,7 +230,7 @@ def prepare_pages(doc, img_dir, dpi, skip_pages, force):
     return adlar
 
 
-def ocr(adlar, img_dir, tsv_dir, tess, tess_args, is_sayisi, yeniden):
+def ocr(adlar, img_dir, tsv_dir, tess, tess_args, is_sayisi, yeniden, lang='tur'):
     os.makedirs(tsv_dir, exist_ok=True)
     env = {**os.environ, 'OMP_THREAD_LIMIT': '1'}
     yapilacak = [a for a in adlar if yeniden or not os.path.isfile(os.path.join(tsv_dir, a + '.tsv'))]
@@ -239,7 +243,7 @@ def ocr(adlar, img_dir, tsv_dir, tess, tess_args, is_sayisi, yeniden):
 
     def run_one(ad):
         subprocess.run([tess, os.path.join(img_dir, ad + '.png'), os.path.join(tsv_dir, ad),
-                        '-l', 'tur', '--psm', '4'] + tess_args + ['tsv'],
+                        '-l', lang, '--psm', '4'] + tess_args + ['tsv'],
                        capture_output=True, env=env, check=False)
         bitti[0] += 1
         gecen = time.time() - t0
@@ -331,6 +335,8 @@ def build_parser():
                     help='Aynı anda kaç sayfa OCR edilsin')
     ap.add_argument('--is', dest='jobs', type=int, help=argparse.SUPPRESS)
     ap.add_argument('--tesseract', help='tesseract programının yolu (otomatik bulunamazsa)')
+    ap.add_argument('--lang', default='tur', help="OCR dili; iki dilli kitaplar için 'tur+eng' (varsayılan: tur)")
+    ap.add_argument('--verse', action='store_true', help='Şiir kitabı kipi: her satır bir dize, her şiir bir bölüm')
     ap.add_argument('--force', dest='force', action='store_true', help='Önceki ara sonuçları yok sayıp her şeyi baştan yap')
     ap.add_argument('--yeniden', dest='force', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument('--verbose', dest='verbose', action='store_true', help='Ayrıntılı çıktı (kurtarılan satırlar vb.)')
@@ -375,8 +381,8 @@ def image_and_ocr(doc, args, paths, title, tess, tess_args):
     print('1/4 Sayfalar görüntüye çevriliyor')
     names = prepare_pages(doc, paths['img_dir'], args.dpi, skip, args.force)
 
-    print('2/4 Türkçe OCR')
-    ocr(names, paths['img_dir'], paths['tsv_dir'], tess, tess_args, args.jobs, args.force)
+    print(f'2/4 OCR ({args.lang})')
+    ocr(names, paths['img_dir'], paths['tsv_dir'], tess, tess_args, args.jobs, args.force, args.lang)
     return names
 
 
@@ -513,10 +519,12 @@ def attach_illustrations(pages, illustrations):
         print(f'  {sum(len(v) for v in illustrations.values())} çizim bulundu')
 
 
-def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
+def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None, lang='tur', verse_mode=False, prose_pages=frozenset()):
     structure.IMG_DIR = img_dir
     structure.TESSERACT = tess
     structure.VERBOSE = verbose
+    structure.LANG = lang
+    structure.VERSE_MODE = verse_mode
     if tess_args:
         # boşluk kurtarma adımı da aynı dil klasörünü kullansın
         structure.TESSERACT_ARGS = tess_args
@@ -549,6 +557,8 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None):
     pages = [p for p in (structure.page(f) for f in files) if p]
     attach_illustrations(pages, illustrations)
     structure.normalize(pages)
+    if verse_mode:
+        verse.prepare(pages, doc, prose_pages)
     return structure.build(pages)
 
 
@@ -588,11 +598,20 @@ def load_heading_config(config_path):
         structure.HEADING_PATTERNS.extend(cfg.get('heading_patterns', []))
 
 
+def load_prose_pages(config_path, page_count):
+    """Şiir kipinde düzyazı kalacak sayfalar (config: "prose_pages": "7-10")."""
+    if not config_path:
+        return frozenset()
+    with open(config_path, encoding='utf-8') as f:
+        return frozenset(parse_page_range(json.load(f).get('prose_pages', ''), page_count))
+
+
 def build_book_structure(doc, names, paths, tess, tess_args, args, title):
     print('3/4 Kitap yapısı kuruluyor (paragraf, bölüm, şiir, dipnot)')
     load_heading_config(args.config)
     files = text_files_from_ocr(names, paths['tsv_dir'])
-    blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose, doc)
+    blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose, doc,
+                                     args.lang, args.verse, load_prose_pages(args.config, len(doc)))
     blocks = drop_short_preface(blocks)
     blocks = drop_duplicate_title_page(blocks, title)
     with open(os.path.join(paths['work_dir'], 'blocks.json'), 'w', encoding='utf-8') as f:
@@ -609,6 +628,7 @@ def epub_config(args, paths, title, cover):
         'cover': cover,
         'out': os.path.abspath(args.output) if args.output else paths['root'] + '.epub',
         'verbose': args.verbose,
+        'notes_per_chapter': args.verse,
     }
     if args.config:
         with open(args.config, encoding='utf-8') as f:
@@ -640,7 +660,7 @@ def main():
     load_dependencies()
 
     tess = find_tesseract(args.tesseract)
-    tess_args = tessdata_args(tess)
+    tess_args = tessdata_args(tess, args.lang)
 
     doc = fitz.open(pdf)
     title = book_title(args, doc, paths['root'])
