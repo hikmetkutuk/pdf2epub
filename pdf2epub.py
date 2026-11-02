@@ -578,8 +578,19 @@ def drop_duplicate_title_page(blocks, title):
     return blocks
 
 
+def load_heading_config(config_path):
+    structure.HEADING_TITLES[:] = []
+    structure.HEADING_PATTERNS[:] = []
+    if config_path:
+        with open(config_path, encoding='utf-8') as f:
+            cfg = json.load(f)
+        structure.HEADING_TITLES.extend(cfg.get('headings', []))
+        structure.HEADING_PATTERNS.extend(cfg.get('heading_patterns', []))
+
+
 def build_book_structure(doc, names, paths, tess, tess_args, args, title):
     print('3/4 Kitap yapısı kuruluyor (paragraf, bölüm, şiir, dipnot)')
+    load_heading_config(args.config)
     files = text_files_from_ocr(names, paths['tsv_dir'])
     blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose, doc)
     blocks = drop_short_preface(blocks)

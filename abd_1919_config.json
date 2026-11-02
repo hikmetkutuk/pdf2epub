@@ -1,0 +1,22 @@
+{
+ "headings": [
+  "Joe Williams",
+  "Hovarda",
+  "Richard Ellsworth Savage",
+  "Randolph Bourne",
+  "Eveline Hutchins",
+  "Mutlu Savaşçı",
+  "Indianalı Bir Don Kişot",
+  "Sayın Vee Wilson",
+  "Kızım",
+  "Morgan Kuruluşları",
+  "Ben Compton",
+  "Joe Hill",
+  "Paul Bunyan",
+  "Bir Amerikalı'nın Ölümlü Bedeni"
+ ],
+ "heading_patterns": [
+  "(?i)haber-?film\\s*\\d+",
+  "(?i)sine-?g[öo]z\\s*\\(\\d+\\)"
+ ]
+}

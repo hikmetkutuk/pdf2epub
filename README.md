@@ -105,7 +105,7 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 | `--skip "2-6,230"` | Bu PDF sayfalarını kitaba alma. `-1` son sayfa, `-2` sondan ikinci demektir |
 | `--cover-page 1` | Kapak resmi olarak kullanılacak PDF sayfası (varsayılan 1) |
 | `--output path.epub` | EPUB'ın kaydedileceği yer |
-| `--config corrections.json` | Kitaba özel yazım düzeltmeleri (aşağıya bakın) |
+| `--config corrections.json` | Kitaba özel yazım düzeltmeleri ve bölüm başlıkları (aşağıya bakın) |
 | `--dpi 400` | Görüntü çözünürlüğü (varsayılan: otomatik) |
 | `--jobs 4` | Aynı anda kaç sayfa OCR edilsin (varsayılan: işlemci sayısı - 1) |
 | `--force` | Ara dosyaları silip her şeyi baştan yapar |
@@ -130,6 +130,14 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 
 `fixes` tam kelime değiştirir. `regex_fixes` düzenli ifade kullanır; bunu bilmiyorsanız sadece `fixes` yeterli. Sonra `--config corrections.json` ile çalıştırın.
 
+**Resimler ve çizimler:** Metin sayfalarının içindeki çizimler (üzerinde yazı olmayan, tam sayfa olmayan resimler) otomatik olarak alınır ve sayfadaki konumlarına yerleştirilir.
+
+**Bölüm başlıkları:** Başlıklar sayfa ortasında geçiyorsa ya da OCR bozuyorsa `--config` dosyasına şunları ekleyin. `headings` OCR hatalarına karşı bulanık eşleşir, `heading_patterns` düzenli ifadedir. Numaralı başlıklarda OCR'ın yanlış okuduğu numara ardışıklığa göre düzeltilir. Örnek: `abd_1919_config.json`. İçindekiler sayfalarını da `--skip` ile çıkarın.
+
+```json
+{"headings": ["Hovarda", "Joe Williams"], "heading_patterns": ["(?i)haber-?film\\s*\\d+"]}
+```
+
 **Kindle'a göndermek:** EPUB'ı "Send to Kindle" (uygulama ya da e-posta) ile gönderebilirsiniz, Amazon kendisi dönüştürür.
 
 ---
@@ -149,6 +157,7 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 - `structure.py`: OCR çıktısından kitap yapısını kurar (paragraf, bölüm, şiir, dipnot, sahne).
 - `epub_writer.py`: EPUB 3 dosyasını yazar (içindekiler, kapak, dipnotlar, Türkçe yazım düzeltmeleri).
 - `convert.bat`: Windows'ta sürükle-bırak ile çalıştırma.
+- `abd_1919_config.json`: Bölüm başlıkları örneği (John Dos Passos, A.B.D. II: 1919).
 - `sample_corrections.json`: Kitaba özel düzeltme dosyası örneği.
 - `saramago_corrections.json`, `woolf_diary_corrections.json`: Genel koda gömülmeyen kitap özel düzeltme örnekleri.
 - `requirements.txt`: Gerekli Python kütüphaneleri.

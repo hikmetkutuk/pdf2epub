@@ -104,6 +104,8 @@ def letters(t):
 
 
 HEADERS = []
+HEADING_TITLES = []    # kitaba özel bölüm başlıkları (config: "headings"); OCR hatalarına karşı bulanık eşleşir
+HEADING_PATTERNS = []  # kitaba özel başlık düzenli ifadeleri (config: "heading_patterns")
 
 
 def tr_lower(t):
@@ -430,6 +432,9 @@ def is_valid_top_title(lines, W, allow_header=False):
 def detect_top_title(lines, page_h, W):
     if len(lines) <= 1:
         return None, lines
+    heading = match_heading(lines[0]['t'])
+    if heading:  # config'te tanımlı başlık, sayfanın ilk satırında
+        return heading, lines[1:]
     line_gap = lines[1]['y'] - lines[0]['y']
     spacing = line_spacing_after_first(lines)
     first = lines[0]
@@ -951,7 +956,8 @@ def page_starts_chapter(page, page_title):
         return True
     if page.get('illus'):  # çizimin yarattığı üst boşluk bölüm başı sayılmaz
         return False
-    return page['first_y'] > page['page_h'] * 0.35 and len(page['body']) > 3
+    starts_mid_sentence = bool(page['body']) and page['body'][0]['t'][:1].islower()
+    return page['first_y'] > page['page_h'] * 0.35 and len(page['body']) > 3 and not starts_mid_sentence
 
 
 def body_for_items(page, page_title, current_title):
@@ -1053,19 +1059,68 @@ def recover_side_label_lists(body):
     return out
 
 
+def match_heading(text):
+    """Satır, config'teki bir bölüm başlığıysa kanonik başlığı, değilse None döndürür."""
+    if len(text) > 60:
+        return None
+    compact = re.sub(r'(?<=\()\s+|\s+(?=\))|(?<=\d)\s+(?=\d)', '', text.strip())
+    if any(re.fullmatch(pattern, compact) for pattern in HEADING_PATTERNS):
+        return compact
+    key = norm_hdr(text)
+    for title in HEADING_TITLES:
+        ref = norm_hdr(title)
+        if abs(len(key) - len(ref)) <= 3 and difflib.SequenceMatcher(None, key, ref).ratio() >= 0.82:
+            return title
+    return None
+
+
+def mark_headings(body):
+    """Başlık satırlarını, ait oldukları dikey konumu koruyan 'chapter' öğelerine çevirir."""
+    if not (HEADING_TITLES or HEADING_PATTERNS):
+        return body
+    out = []
+    for line in body:
+        title = match_heading(line['t']) if line['kind'] == 'text' else None
+        out.append({'kind': 'chapter', 'title': title, 'y': line['y']} if title else line)
+    return out
+
+
+def renumber_headings(items):
+    """Ardışık numaralı başlıklarda (Sine-göz (34), (35)...) OCR'ın yanlış okuduğu numarayı düzeltir."""
+    last = {}
+    for it in items:
+        match = re.fullmatch(r'(.*?)(\d+)(\)?)', it.get('title') or '') if it['kind'] == 'chapter' else None
+        if not match or not any(re.fullmatch(p, it['title']) for p in HEADING_PATTERNS):
+            continue
+        prefix, number, close = match.group(1), int(match.group(2)), match.group(3)
+        if prefix in last and number <= last[prefix]:
+            number = last[prefix] + 1
+            it['title'] = f'{prefix}{number}{close}'
+        last[prefix] = number
+
+
+def continues_sentence(items):
+    """Önceki metin satırı cümle sonu işaretiyle bitmiyorsa yeni sayfa aynı cümleyi sürdürüyordur."""
+    last = next((it for it in reversed(items) if it['kind'] != 'note'), None)
+    return bool(last) and last['kind'] == 'text' and not last['t'].rstrip(' |*').endswith(END_PUNCT)
+
+
 def build_items(pages):
     items = []
     current_title = None
     for pg in pages:
         page_title = pg.get('title')
-        chapter_start = page_starts_chapter(pg, page_title)
-        if chapter_start:
-            if page_title:
-                current_title = page_title
+        chapter_start = page_starts_chapter(pg, page_title) and (page_title or not continues_sentence(items))
+        if chapter_start and not page_title and current_title:
+            items.append({'kind': 'break'})  # başlıklı bölüm içinde başlıksız boşluk: sahne geçişi
+            chapter_start = False
+        elif chapter_start:
+            current_title = page_title or current_title
             items.append({'kind': 'chapter', 'title': page_title})
-        body = recover_side_label_lists(body_for_items(pg, page_title, current_title))
+        body = mark_headings(recover_side_label_lists(body_for_items(pg, page_title, current_title)))
         append_page_content(items, body, chapter_start, pg.get('illus') or [])
         append_note_items(items, pg['notes'])
+    renumber_headings(items)
     return items
 
 
@@ -1277,6 +1332,8 @@ class BlockBuilder:
     def start_chapter(self, title):
         self.flush()
         self.flush_verse('verse')
+        if self.blocks and self.blocks[-1] == ('chapter', title):
+            return  # aynı başlık art arda iki kez okunmuş
         self.blocks.append(('chapter', title))
         self.in_epigraph = True
         self.prev = None
