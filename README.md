@@ -107,6 +107,7 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 | `--output path.epub` | EPUB'ın kaydedileceği yer |
 | `--config corrections.json` | Kitaba özel yazım düzeltmeleri ve bölüm başlıkları (aşağıya bakın) |
 | `--lang tur+eng` | OCR dili. İki dilli kitaplarda `tur+eng` (varsayılan: `tur`) |
+| `--play` | Oyun kipi: konuşmacı adı kalın, diyalog düz, sahne yönergesi italik; perdeler bölüm olur, güveni düşük OCR satırları PDF metin katmanından alınır |
 | `--verse` | Şiir kitabı kipi: her satır bir dize, her şiir bir bölüm, iki dilli sayfalarda İngilizce dizeler ayrı biçimlenir |
 | `--dpi 400` | Görüntü çözünürlüğü (varsayılan: otomatik) |
 | `--jobs 4` | Aynı anda kaç sayfa OCR edilsin (varsayılan: işlemci sayısı - 1) |
@@ -146,6 +147,12 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 python pdf2epub.py kitap.pdf --lang tur+eng --verse --config oda_muzigi_config.json --skip 2-6
 ```
 
+**Oyun metinleri:** `--play` ile çalıştırın. Düzeltilmesi gereken OCR hatalarını config dosyasında `regex_fixes` ile verebilirsiniz. Örnek: `marti_config.json`.
+
+```
+python pdf2epub.py oyun.pdf --play --skip 2-5 --config marti_config.json
+```
+
 **Kindle'a göndermek:** EPUB'ı "Send to Kindle" (uygulama ya da e-posta) ile gönderebilirsiniz, Amazon kendisi dönüştürür.
 
 ---
@@ -165,6 +172,8 @@ python pdf2epub.py kitap.pdf --lang tur+eng --verse --config oda_muzigi_config.j
 - `structure.py`: OCR çıktısından kitap yapısını kurar (paragraf, bölüm, şiir, dipnot, sahne).
 - `epub_writer.py`: EPUB 3 dosyasını yazar (içindekiler, kapak, dipnotlar, Türkçe yazım düzeltmeleri).
 - `convert.bat`: Windows'ta sürükle-bırak ile çalıştırma.
+- `play.py`: Oyun metni kipi (konuşmacı, diyalog, sahne yönergesi, perdeler).
+- `marti_config.json`: Oyun config örneği (A. Çehov, Martı).
 - `verse.py`: Şiir kitabı kipi (şiir başlıkları, iki dilli sayfalar, numaralı dipnotlar).
 - `oda_muzigi_config.json`: Şiir kitabı config örneği (James Joyce, Oda Müziği).
 - `abd_1919_config.json`: Bölüm başlıkları örneği (John Dos Passos, A.B.D. II: 1919).

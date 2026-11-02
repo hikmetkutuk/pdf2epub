@@ -44,7 +44,7 @@ epub_writer: Any = None
 
 # ---------------------------------------------------------------- bağımlılıklar
 def load_dependencies():
-    global fitz, np, Image, structure, epub_writer, verse
+    global fitz, np, Image, structure, epub_writer, verse, play
     try:
         _fitz = importlib.import_module('pymupdf')  # PyMuPDF >= 1.24
     except ImportError:
@@ -62,6 +62,7 @@ def load_dependencies():
     _epub_writer = importlib.import_module('epub_writer')
 
     verse = importlib.import_module('verse')
+    play = importlib.import_module('play')
     fitz = _fitz
     np = _np
     Image = _Image
@@ -336,6 +337,7 @@ def build_parser():
     ap.add_argument('--is', dest='jobs', type=int, help=argparse.SUPPRESS)
     ap.add_argument('--tesseract', help='tesseract programının yolu (otomatik bulunamazsa)')
     ap.add_argument('--lang', default='tur', help="OCR dili; iki dilli kitaplar için 'tur+eng' (varsayılan: tur)")
+    ap.add_argument('--play', action='store_true', help='Oyun kipi: konuşmacı, diyalog ve sahne yönergesi ayrı biçimlenir')
     ap.add_argument('--verse', action='store_true', help='Şiir kitabı kipi: her satır bir dize, her şiir bir bölüm')
     ap.add_argument('--force', dest='force', action='store_true', help='Önceki ara sonuçları yok sayıp her şeyi baştan yap')
     ap.add_argument('--yeniden', dest='force', action='store_true', help=argparse.SUPPRESS)
@@ -519,12 +521,28 @@ def attach_illustrations(pages, illustrations):
         print(f'  {sum(len(v) for v in illustrations.values())} çizim bulundu')
 
 
-def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None, lang='tur', verse_mode=False, prose_pages=frozenset()):
+def report_text_layer(reference, ratio):
+    if ratio is None:
+        return
+    if reference:
+        print(f"  PDF metin katmanı güvenilir (uyuşmazlık %{100 * ratio:.1f}): OCR'ın emin olmadığı kelimelerde kullanılacak")
+        return
+    message = f'  PDF metin katmanı güvenilmez (uyuşmazlık %{100 * ratio:.1f})'
+    if structure.RESCUE_REFERENCE:
+        message += ': yalnızca şüpheli düşük güvenli kelimelerde kullanılacak'
+    else:
+        message += ': kullanılmıyor'
+    print(message)
+
+
+def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None, lang='tur', verse_mode=False, prose_pages=frozenset(), play_mode=False):
     structure.IMG_DIR = img_dir
     structure.TESSERACT = tess
     structure.VERBOSE = verbose
     structure.LANG = lang
     structure.VERSE_MODE = verse_mode
+    if play_mode and doc is not None:
+        play.patch_read_lines(doc)
     if tess_args:
         # boşluk kurtarma adımı da aynı dil klasörünü kullansın
         structure.TESSERACT_ARGS = tess_args
@@ -543,23 +561,14 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None, 
     illustrations = {}
     if doc is not None:
         illustrations = extract_illustrations(doc, files, os.path.join(os.path.dirname(img_dir), 'illus'))
-    if ratio is not None:
-        if reference:
-            print(f"  PDF metin katmanı güvenilir (uyuşmazlık %{100 * ratio:.1f}): OCR'ın emin olmadığı kelimelerde kullanılacak")
-        else:
-            message = f'  PDF metin katmanı güvenilmez (uyuşmazlık %{100 * ratio:.1f})'
-            if structure.RESCUE_REFERENCE:
-                message += ': yalnızca şüpheli düşük güvenli kelimelerde kullanılacak'
-            else:
-                message += ': kullanılmıyor'
-            print(message)
+    report_text_layer(reference, ratio)
     structure.HEADERS[:] = structure.detect_headers(files)
     pages = [p for p in (structure.page(f) for f in files) if p]
     attach_illustrations(pages, illustrations)
     structure.normalize(pages)
     if verse_mode:
         verse.prepare(pages, doc, prose_pages)
-    return structure.build(pages)
+    return play.build(pages) if play_mode else structure.build(pages)
 
 
 def drop_short_preface(blocks):
@@ -611,7 +620,7 @@ def build_book_structure(doc, names, paths, tess, tess_args, args, title):
     load_heading_config(args.config)
     files = text_files_from_ocr(names, paths['tsv_dir'])
     blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose, doc,
-                                     args.lang, args.verse, load_prose_pages(args.config, len(doc)))
+                                     args.lang, args.verse, load_prose_pages(args.config, len(doc)), args.play)
     blocks = drop_short_preface(blocks)
     blocks = drop_duplicate_title_page(blocks, title)
     with open(os.path.join(paths['work_dir'], 'blocks.json'), 'w', encoding='utf-8') as f:

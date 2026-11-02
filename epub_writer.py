@@ -179,6 +179,9 @@ p { margin: 0; text-indent: 1.5em; text-align: justify; hyphens: auto; -webkit-h
 p.date { text-align: right; text-indent: 0; font-style: italic; margin: 1.6em 0 0.6em; }
 p.date + p { text-indent: 0; }
 p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
+.speaker { margin: 1.1em 0 0; font-weight: bold; font-variant: small-caps; letter-spacing: 0.04em; text-indent: 0; page-break-after: avoid; }
+.dialogue { margin: 0 0 0 1.2em; text-indent: 0; text-align: left; }
+.direction { margin: 0.4em 0 0.4em 2.4em; font-style: italic; text-indent: 0; text-align: left; }
 .illus { text-align: center; margin: 1em 0; text-indent: 0; page-break-inside: avoid; }
 .illus img { max-width: 100%; max-height: 90vh; }
 .break { text-align: center; margin: 1.2em 0; text-indent: 0; letter-spacing: 0.5em; }
@@ -273,6 +276,11 @@ def append_verse(parts, block, note_numbers):
     parts.append(f'<div class="{cls}"{attrs}>{lines}</div>')
 
 
+def append_play_line(parts, kind, text, note_numbers):
+    text = TOKEN.sub(note_linker(note_numbers), esc(fix(text)))
+    parts.append(f'<p class="{kind}">{text}</p>')
+
+
 def append_definition_list(parts, block):
     rows = []
     for term, desc in block[1]:
@@ -309,6 +317,8 @@ def render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_n
             append_definition_list(parts, block)
         elif kind == 'break':
             append_break(parts)
+        elif kind in ('speaker', 'dialogue', 'direction'):
+            append_play_line(parts, kind, block[1], note_numbers)
         elif kind == 'subhead':
             parts.append(f'<h2>{TOKEN.sub(note_linker(note_numbers), esc(fix(block[1])))}</h2>')
         elif kind == 'img':
@@ -352,7 +362,7 @@ def collect_note_links(blocks):
         elif block[0] == 'verse':
             for line in block[1]:
                 referenced_notes.update(int(match) for match in TOKEN.findall(line))
-        elif block[0] == 'subhead':
+        elif block[0] in ('dialogue', 'direction', 'subhead'):
             referenced_notes.update(int(match) for match in TOKEN.findall(block[1]))
     return note_numbers, referenced_notes
 

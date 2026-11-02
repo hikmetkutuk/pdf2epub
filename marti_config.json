@@ -1,0 +1,56 @@
+{
+ "regex_fixes": [
+  [
+   "\\bbepsi\\b",
+   "hepsi"
+  ],
+  [
+   "\\bdaba\\b",
+   "daha"
+  ],
+  [
+   "\\bdedigin\\b",
+   "dediğin"
+  ],
+  [
+   "\\bdayanagımız\\b",
+   "dayanağımız"
+  ],
+  [
+   "\\bvarlıgım\\b",
+   "varlığım"
+  ],
+  [
+   "\\bolacagına\\b",
+   "olacağına"
+  ],
+  [
+   "\\bekmege\\b",
+   "ekmeğe"
+  ],
+  [
+   "\\bgörmeliyım\\b",
+   "görmeliyim"
+  ],
+  [
+   "\\bfılan\\b",
+   "filan"
+  ],
+  [
+   "\\bjewne\\b",
+   "jeune"
+  ],
+  [
+   "gui a voulu",
+   "qui a voulu"
+  ],
+  [
+   "\\bkilornetreye\\b",
+   "kilometreye"
+  ],
+  [
+   "\\bfawt\\b",
+   "faut"
+  ]
+ ]
+}
