@@ -1,5 +1,6 @@
 """Oyun metni kipi: konuşmacı adı, diyalog ve sahne yönergesi ayrı bloklar olur (A. Çehov, Martı gibi)."""
 import collections
+import difflib
 import re
 import statistics as st
 import unicodedata
@@ -8,10 +9,11 @@ import structure
 
 LOW_CONF = 75
 LAYER_TOLERANCE = 0.015
-ACT = re.compile(r'^\W*[IVXL1]+\W*\s*Perde\W*$', re.IGNORECASE)
+ACT = re.compile(r'^\W*[IVXL1H]+\W*\s*Perde\W*$', re.IGNORECASE)
 SPEAKER = re.compile(r"^[A-ZÇĞİÖŞÜÂÎÛ][A-ZÇĞİÖŞÜÂÎÛ.'’-]*(?: [A-ZÇĞİÖŞÜÂÎÛ][A-ZÇĞİÖŞÜÂÎÛ.'’-]*){0,3}$")
 SPEAKER_REL = 45      # konuşmacı adı sol kenara yakındır
 DIRECTION_REL = 140   # sahne yönergesi diyalogdan da içeridedir
+RARE_SPEAKER = 2
 ROMAN = ((10, 'X'), (9, 'IX'), (5, 'V'), (4, 'IV'), (1, 'I'))
 
 
@@ -84,6 +86,7 @@ class PlayBuilder:
         self.kind = None      # 'dialogue' ya da 'direction': biriken satırların türü
         self.buffer = []
         self.acts = 0
+        self.opening = False  # perde başlığından ilk konuşmacıya kadar olan sahne tarifi
 
     def flush(self):
         if self.buffer:
@@ -96,7 +99,8 @@ class PlayBuilder:
         return self.kind == 'direction' and text.count('(') > text.count(')')
 
     def add_line(self, kind, text):
-        continuing = self.kind == kind and (kind == 'dialogue' or self.direction_open() or not text.startswith('('))
+        merges = kind == 'dialogue' or self.direction_open() or self.opening or not text.startswith('(')
+        continuing = self.kind == kind and merges
         if not continuing:
             self.flush()
             self.kind = kind
@@ -109,9 +113,11 @@ class PlayBuilder:
     def start_act(self):
         self.acts += 1
         self.start_chapter(f'{roman(self.acts)}. Perde')
+        self.opening = True
 
     def add_speaker(self, name):
         self.flush()
+        self.opening = False
         self.blocks.append(('speaker', structure.clean_text(name)))
 
     def add_notes(self, notes):
@@ -132,7 +138,7 @@ def classify(line):
 
 
 TOKEN = re.compile(r'⟦(\d+)⟧')
-STRAY_QUOTE = re.compile(r'(?<=[^\W\d_])[”"*•°](?=[^\W\d_]|\s|$)')
+STRAY_QUOTE = re.compile(r'(?<=[\w.!?])(?<![\d_])[”"*•°](?=[^\W\d_]|\s|$)')  # öncesi harf ya da .!? olmalı
 
 
 def unbalanced_quote(text, match):
@@ -156,23 +162,56 @@ def link_stray_markers(page):
         line['t'] = line['t'][:match.start()] + f'⟦{note_id}⟧' + line['t'][match.end():]
 
 
-def add_page(builder, page):
+def start_page(builder, page):
+    """Sayfa başlığına göre kişiler listesini ya da yeni perdeyi başlatır."""
     title = page.get('title')
-    if not builder.blocks and not (title and ACT.match(title)):
+    is_act = bool(title and ACT.match(title))
+    if not builder.blocks and not is_act:
         builder.start_chapter('Kişiler')  # oyunun başındaki kişiler listesi
-    if title and ACT.match(title):
+    if is_act:
         builder.start_act()
     elif title and SPEAKER.match(title) and not builder.blocks:
         builder.start_chapter(title.title())
+
+
+def add_line_block(builder, line):
+    kind = classify(line)
+    if kind == 'act':
+        builder.start_act()
+    elif kind == 'speaker':
+        builder.add_speaker(line['t'])
+    else:
+        as_direction = builder.opening or builder.direction_open()
+        builder.add_line('direction' if as_direction else kind, line['t'])
+
+
+def title_case(text):
+    return ' '.join(w[:1] + structure.tr_lower(w[1:]) for w in text.split())
+
+
+def is_half_title(builder, page):
+    """Kişiler listesinden sonra gelen, oyunun adını ve alt başlığını taşıyan kısa sayfa."""
+    body = page['body']
+    return (bool(builder.blocks) and builder.acts == 0 and 1 <= len(body) <= 3 and not page['notes']
+            and bool(SPEAKER.match(body[0]['t'])) and not ACT.match(body[0]['t']))
+
+
+def add_half_title(builder, page):
+    first, *rest = page['body']
+    builder.start_chapter(title_case(first['t']))
+    for line in rest:
+        builder.add_line('direction', line['t'])
+    builder.flush()
+
+
+def add_page(builder, page):
+    if is_half_title(builder, page):
+        add_half_title(builder, page)
+        return
+    start_page(builder, page)
     link_stray_markers(page)
     for line in page['body']:
-        kind = classify(line)
-        if kind == 'act':
-            builder.start_act()
-        elif kind == 'speaker':
-            builder.add_speaker(line['t'])
-        else:
-            builder.add_line('direction' if builder.direction_open() else kind, line['t'])
+        add_line_block(builder, line)
     builder.add_notes(page['notes'])
 
 
@@ -190,7 +229,14 @@ def unify_speakers(blocks):
         key = name_key(name)
         if key not in best or count > counts[best[key]]:
             best[key] = name
-    return [('speaker', best[name_key(b[1])]) if b[0] == 'speaker' else b for b in blocks]
+    names = {name: best[name_key(name)] for name in counts}
+    frequent = [name for name in set(names.values()) if counts[name] > RARE_SPEAKER]
+    for name in set(names.values()):
+        if counts[name] <= RARE_SPEAKER:  # tek seferlik okuma hatası ("YELE.NA") sık görülen adla birleşir
+            match = difflib.get_close_matches(name, frequent, n=1, cutoff=0.9)
+            if match:
+                names.update({k: match[0] for k, v in names.items() if v == name})
+    return [('speaker', names[b[1]]) if b[0] == 'speaker' else b for b in blocks]
 
 
 def build(pages):

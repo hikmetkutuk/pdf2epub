@@ -1,0 +1,60 @@
+{
+ "regex_fixes": [
+  [
+   "\\bAsirov\\b",
+   "Astrov"
+  ],
+  [
+   "\\bbabçede\\b",
+   "bahçede"
+  ],
+  [
+   "\\bbareketle\\b",
+   "hareketle"
+  ],
+  [
+   "\\bbeyecan\\b",
+   "heyecan"
+  ],
+  [
+   "\\bbızla\\b",
+   "hızla"
+  ],
+  [
+   "\\bgezmeve\\b",
+   "gezmeye"
+  ],
+  [
+   "\\bguantum\\b",
+   "quantum"
+  ],
+  [
+   "\\bgördügünüz\\b",
+   "gördüğünüz"
+  ],
+  [
+   "\\boldugum\\b",
+   "olduğum"
+  ],
+  [
+   "\\boldugunu\\b",
+   "olduğunu"
+  ],
+  [
+   "\\bSerebryakou\\b",
+   "Serebryakov"
+  ],
+  [
+   "\\bsöylevecek\\b",
+   "söyleyecek"
+  ],
+  [
+   "\\bızlemek\\b",
+   "izlemek"
+  ],
+  [
+   "\\bber türden\\b",
+   "her türden"
+  ]
+ ]
+}
