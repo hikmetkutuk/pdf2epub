@@ -141,7 +141,7 @@ Bölüm listesine bakmak, her şeyin yolunda olup olmadığını anlamanın en h
 {"headings": ["Hovarda", "Joe Williams"], "heading_patterns": ["(?i)haber-?film\\s*\\d+"]}
 ```
 
-**Şiir kitapları:** `--verse` ile çalıştırın. Sayfa altındaki küçük puntolu numaralı dipnotlar dipnota çevrilir, OCR'ın düşürdüğü şiir numaraları ardışıklıktan tamamlanır. Şiir kipinde düzyazı kalması gereken sayfaları (önsöz gibi) config dosyasında `"prose_pages": "7-10"` ile belirtin. Örnek: `configs/oda_muzigi.json`.
+**Şiir kitapları:** `--verse` ile çalıştırın. Sayfa altındaki küçük puntolu numaralı dipnotlar dipnota çevrilir, OCR'ın düşürdüğü şiir numaraları ardışıklıktan tamamlanır. Şiir kipinde düzyazı kalması gereken sayfaları (önsöz gibi) config dosyasında `"prose_pages": "7-10"` ile belirtin. Örnek: `configs/oda_muzigi.json`. Tek dilli kitaplarda başlıklı her şiiri içindekiler listesine ayrı bölüm olarak koymak için config'e `"poem_chapters": true` ekleyin. Örnek: `configs/rilke.json`.
 
 ```
 python pdf2epub.py kitap.pdf --lang tur+eng --verse --config configs/oda_muzigi.json --skip 2-6

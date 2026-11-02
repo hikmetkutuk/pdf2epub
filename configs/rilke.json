@@ -1,0 +1,53 @@
+{
+  "prose_pages": "11-19,33,41-68,69,103,113",
+  "poem_chapters": true,
+  "headings": [
+    "SANCAKTAR CHRISTOPH RILKE'NİN AŞKI VE ÖLÜMÜ ÜZERİNE BİR EZGİ'den"
+  ],
+  "regex_fixes": [
+    [
+      "^(HERCAİ ŞİİRLER)[*”]+$",
+      "\\1"
+    ],
+    [
+      "^(DUINO AĞITLARI'ndan)[*”]+$",
+      "\\1"
+    ],
+    [
+      "^RESİMLER KİTAB[IPİ]'?ndan[*”]*$",
+      "RESİMLER KİTABI'ndan"
+    ],
+    [
+      "^SAATLER KİTAB[IPİ]'?ndan[*”]*$",
+      "SAATLER KİTABI'ndan"
+    ],
+    [
+      "^ORPHEUS'?A SONE'den[*”]*$",
+      "ORPHEUS'A SONE'den"
+    ],
+    [
+      "^VENÜSÜN DOĞUŞU$",
+      "VENÜS'ÜN DOĞUŞU"
+    ],
+    [
+      "^KONŞU$",
+      "KOMŞU"
+    ],
+    [
+      "\\bRi/ke",
+      "Rilke"
+    ],
+    [
+      "\\bOyzurgalı\\b",
+      "Omurgalı"
+    ],
+    [
+      "\\bMAHKÜMLAR\\b",
+      "MAHKUMLAR"
+    ],
+    [
+      "\\bMahkümlar\\b",
+      "Mahkumlar"
+    ]
+  ]
+}

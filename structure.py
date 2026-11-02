@@ -40,6 +40,7 @@ VOCAB = {}
 REF_ODD_APOSTROPHE_SUFFIX = re.compile(r"['’][a-zçğıöşü]*(?:m|rn|nm)$")
 NON_LETTER = r"[^A-Za-zÇĞİÖŞÜçğıöşü_]"
 PAGE_NUM = re.compile(rf"{NON_LETTER}{{0,2}}[0-9]{{1,4}}{NON_LETTER}{{0,2}}")
+ROMAN_PAGE_NUM = re.compile(r"[IVXLivxl1|]{1,8}")  # OCR'ın "xiii" yerine okuduğu "Xlll" gibi okumalar
 END_PUNCT = tuple('.!?:…"”\'»')
 EDGE_NOISE = ' \t\r\n\f\v|*©'
 BREAK_CHARS = set(' \t\r\n\f\v*#∴•·.,:;©°+')
@@ -375,6 +376,8 @@ def is_page_number_noise(line, page_h, at_bottom):
         return in_margin or (line['y'] > page_h * 0.8 if at_bottom else line['y'] < page_h * 0.2)
     if norm_hdr(text) == 'son':
         return False
+    if at_bottom and in_margin and ROMAN_PAGE_NUM.fullmatch(text):  # üstte olsaydı şiir numarası olabilirdi
+        return True
     return in_margin and letters(text) <= 3 and len(text) <= 5
 
 
@@ -1060,9 +1063,9 @@ def recover_side_label_lists(body):
     return out
 
 
-def match_heading(text):
+def match_heading(text, limit=60):
     """Satır, config'teki bir bölüm başlığıysa kanonik başlığı, değilse None döndürür."""
-    if len(text) > 60:
+    if len(text) > limit:
         return None
     compact = re.sub(r'(?<=\()\s+|\s+(?=\))|(?<=\d)\s+(?=\d)', '', text.strip())
     if any(re.fullmatch(pattern, compact) for pattern in HEADING_PATTERNS):
@@ -1075,14 +1078,26 @@ def match_heading(text):
     return None
 
 
+def heading_at(body, i):
+    """(başlık, kapladığı satır sayısı): başlık tek satırda ya da iki satıra bölünmüş olabilir."""
+    line = body[i]
+    if line['kind'] != 'text':
+        return None, 1
+    title = match_heading(line['t'])
+    if title or i + 1 >= len(body) or body[i + 1]['kind'] != 'text':
+        return title, 1
+    return match_heading(f"{line['t']} {body[i + 1]['t']}", 100), 2
+
+
 def mark_headings(body):
     """Başlık satırlarını, ait oldukları dikey konumu koruyan 'chapter' öğelerine çevirir."""
     if not (HEADING_TITLES or HEADING_PATTERNS):
         return body
-    out = []
-    for line in body:
-        title = match_heading(line['t']) if line['kind'] == 'text' else None
-        out.append({'kind': 'chapter', 'title': title, 'y': line['y']} if title else line)
+    out, i = [], 0
+    while i < len(body):
+        title, span = heading_at(body, i)
+        out.append({'kind': 'chapter', 'title': title, 'y': body[i]['y']} if title else body[i])
+        i += span if title else 1
     return out
 
 

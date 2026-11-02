@@ -192,6 +192,7 @@ p.first, .break + p, h1 + p, .epigraph + p, .verse + p { text-indent: 0; }
 .epigraph p { text-align: center; }
 .end { text-align: center; margin-top: 2em; text-indent: 0; letter-spacing: 0.2em; }
 a.noteref { text-decoration: none; font-size: 0.75em; vertical-align: super; line-height: 0; }
+.intro { font-size: 0.9em; font-style: italic; text-indent: 0; margin-bottom: 1.5em; }
 aside.footnote, .notes p { font-size: 0.85em; text-indent: 0; margin: 0.4em 0; }
 .notes { margin-top: 2.5em; border-top: 1px solid #999; padding-top: 0.6em; }
 .definition-list { width: 100%; border-collapse: collapse; margin: 1em 0; }
@@ -307,8 +308,11 @@ def append_note(notes_html, block, note_numbers, referenced_notes):
 
 
 def render_chapter_blocks(chapter, parts, notes_html, note_numbers, referenced_notes):
-    for block in chapter:
+    for index, block in enumerate(chapter):
         kind = block[0]
+        if kind == 'note' and index == 0:  # başlığa bağlı not: bölüm başında giriş paragrafı
+            parts.append(f'<p class="intro">{esc(fix(block[1]))}</p>')
+            continue
         if kind == 'p':
             append_paragraph(parts, block[1], note_numbers)
         elif kind == 'verse':
@@ -352,10 +356,13 @@ def collect_note_links(blocks):
     note_numbers = {}
     referenced_notes = set()
     first = 0
+    previous = None
     for block in blocks:
+        intro_note = block[0] == 'note' and previous == 'chapter'  # numarasız giriş paragrafı olarak yazılır
+        previous = block[0]
         if block[0] == 'chapter' and CFG.get('notes_per_chapter'):
             first = len(note_numbers)  # şiir kitaplarında dipnot numaraları her şiirde yeniden başlar
-        if block[0] == 'note' and len(block) > 2 and block[2] is not None:
+        if block[0] == 'note' and len(block) > 2 and block[2] is not None and not intro_note:
             note_numbers[block[2]] = len(note_numbers) + 1 - first
         if block[0] == 'p':
             referenced_notes.update(int(match) for match in TOKEN.findall(block[1]))

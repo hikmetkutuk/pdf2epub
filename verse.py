@@ -12,6 +12,7 @@ POEM_NUMBER = re.compile(r'^\W*(\d{1,3}|[IVXL]{1,6})\W{0,2}$')
 SUPERSCRIPTS = '¹²³⁴⁵⁶⁷⁸⁹⁰'  # \w sayıldıkları için başlık sonundaki dipnot işareti olarak ayrıca atılır
 NOTE_START = re.compile(r'^[\s|]*(\d{1,2}|[ıIl])\s+(?=\S)')
 MAX_TITLE = 70
+POEM_CHAPTERS = False  # config: "poem_chapters": tek dilli kitapta başlıklı her şiir ayrı bölüm olur
 TOKEN = re.compile(r'⟦\d+⟧')
 OCR_DIGITS = re.compile(r"(?<=[^\W\d_])(\d{1,2})$|(?<=[.,;:!?'’\"”])[!|]?(\d{1,2})$")
 JUNK_TAIL = re.compile(r'(?:[?®|_]+|!{2})$')  # işaretin OCR'da bıraktığı artık karakterler
@@ -180,14 +181,25 @@ def page_markers(doc, pg, start):
     return fill_markers(strict, loose_all + ocr_markers(pg, limit), count), count
 
 
-def split_small_notes(pg, doc):
+def title_page_note_start(pg):
+    """Yalnızca başlık satırları ve altta boşlukla ayrılmış küçük bir dipnot bloğu olan sayfada dipnotun başlangıcı."""
+    body = pg['body']
+    gap = next((i for i, d in enumerate(body) if d.get('gap')), None)
+    if gap is None or not 1 <= gap <= 3 or len(body) - gap < 3:
+        return None
+    return gap if all(d['y'] > pg['page_h'] * 0.6 for d in body[gap:]) else None
+
+
+def split_small_notes(pg, doc, title_page=False):
     """Sayfa altındaki numaralı çevirmen dipnotlarını dipnota çevirir ve metindeki işaretlere bağlar."""
     start = resplit_recovered_notes(pg, layer_markers(doc, pg['number']))
     if start is None:
         start = small_note_start(pg)
+    if start is None and title_page:
+        start = title_page_note_start(pg)
     markers, count = page_markers(doc, pg, start)
     notes = read_notes(pg, start, max(len(markers), count)) if start is not None else []
-    if notes and not (any(n for n, _ in notes) or markers):
+    if notes and not (title_page or any(n for n, _ in notes) or markers):
         notes = []  # işaret de numara da yoksa küçük satırlar dipnot değildir
     loose = [note_id for note_id, _ in pg['notes']]
     if notes:
@@ -395,7 +407,8 @@ def prepare_page(pg, state, doc):
     if starts:
         title_tokens = TOKEN.findall(body[0]['t']) if body else []
         title, numbered = split_title(pg)
-        if lang != 'tr' and section_key(title) != state.get('section'):  # bölümle aynı adlı tek şiir ayrı bölüm olmaz
+        as_chapter = lang != 'tr' or (POEM_CHAPTERS and bool(title))
+        if as_chapter and section_key(title) != state.get('section'):  # bölümle aynı adlı tek şiir ayrı bölüm olmaz
             pg['title'] = chapter_label(title, numbered, pg['body'])
         elif title and not numbered:
             body.insert(0, {'kind': 'subhead', 't': title + ''.join(title_tokens), 'y': 0})
@@ -436,7 +449,7 @@ def group_languages(pages):
     """Her şiirin (iki bölüm başlığı arasındaki sayfaların) İngilizce sayfalarını Türkçe sayfalardan önce toplar."""
     start = 0
     for i in range(1, len(pages) + 1):
-        if i == len(pages) or pages[i].get('title'):
+        if i == len(pages) or pages[i].get('title') or 'lang' not in pages[i]:  # düzyazı sayfası yerinde kalır
             run = pages[start:i]
             pages[start:i] = [pg for pg in run if pg.get('lang') != 'tr'] + [pg for pg in run if pg.get('lang') == 'tr']
             start = i
@@ -447,7 +460,9 @@ def prepare(pages, doc, prose_pages=frozenset()):
     for pg in pages:
         match = re.search(r'p-(\d+)', pg['name'])
         pg['number'] = int(match.group(1)) if match else 0
-        if pg['number'] not in prose_pages:
+        if pg['number'] in prose_pages:
+            split_small_notes(pg, doc, title_page=True)  # düzyazı sayfasının altındaki yıldızlı dipnot da gövdeden ayrılır
+        else:
             prepare_page(pg, state, doc)
     fill_poem_numbers(pages)
     group_languages(pages)

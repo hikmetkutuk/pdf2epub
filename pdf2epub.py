@@ -40,6 +40,8 @@ np: Any = None
 Image: Any = None
 structure: Any = None
 epub_writer: Any = None
+verse: Any = None
+play: Any = None
 
 
 # ---------------------------------------------------------------- bağımlılıklar
@@ -600,11 +602,13 @@ def drop_duplicate_title_page(blocks, title):
 def load_heading_config(config_path):
     structure.HEADING_TITLES[:] = []
     structure.HEADING_PATTERNS[:] = []
+    verse.POEM_CHAPTERS = False
     if config_path:
         with open(config_path, encoding='utf-8') as f:
             cfg = json.load(f)
         structure.HEADING_TITLES.extend(cfg.get('headings', []))
         structure.HEADING_PATTERNS.extend(cfg.get('heading_patterns', []))
+        verse.POEM_CHAPTERS = bool(cfg.get('poem_chapters'))
 
 
 def load_prose_pages(config_path, page_count):
