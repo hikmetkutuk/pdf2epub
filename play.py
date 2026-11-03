@@ -6,8 +6,10 @@ import statistics as st
 import unicodedata
 
 import structure
+import verse
 
 LOW_CONF = 75
+LAYER_DOC = []  # patch_read_lines'ın aldığı PDF; dipnot işaretleri için de kullanılır
 LAYER_TOLERANCE = 0.015
 ACT = re.compile(r'^\W*[IVXL1H]+\W*\s*Perde\W*$', re.IGNORECASE)
 SPEAKER = re.compile(r"^[A-ZÇĞİÖŞÜÂÎÛ][A-ZÇĞİÖŞÜÂÎÛ.'’-]*(?: [A-ZÇĞİÖŞÜÂÎÛ][A-ZÇĞİÖŞÜÂÎÛ.'’-]*){0,3}$")
@@ -69,6 +71,7 @@ def patch_page_lines(lines, layer, height):
 def patch_read_lines(doc):
     """Güveni düşük OCR satırlarını (örn. "Şşş..." için "9ŞŞ...") metin katmanındaki satırla değiştirir."""
     original = structure.read_lines
+    LAYER_DOC[:] = [doc]
 
     def patched(path):
         lines = original(path)
@@ -151,12 +154,39 @@ def unbalanced_quote(text, match):
     return text.count('"') % 2 == 1
 
 
+def layer_star_markers(number):
+    """PDF metin katmanında sözcüğün ardından gelen '*' dipnot işaretleri: [(sayfa oranı olarak y, sözcük)]."""
+    page = LAYER_DOC[0][number - 1]
+    found = []
+    for block in page.get_text('dict')['blocks']:
+        for line in block.get('lines', []):
+            if max(s['size'] for s in line['spans']) > 8:
+                text = ''.join(s['text'] for s in line['spans'])
+                found += [(line['bbox'][1] / page.rect.height, m.group(1)) for m in re.finditer(r'(\S+)\s*\*', text)]
+    return found
+
+
+def link_layer_markers(page, free):
+    """OCR'ın tamamen düşürdüğü ya da tırnağa çevirdiği '*' işaretlerini metin katmanındaki konumdan bağlar."""
+    match = re.search(r'p-(\d+)', page['name'])
+    stars = layer_star_markers(int(match.group(1))) if match else []
+    if len(stars) != len(free):
+        return
+    for (y, word), note_id in zip(stars, free):
+        verse.place_marker(page['body'], y * page['page_h'], word, note_id)
+    for line in page['body']:
+        line['t'] = re.sub(r'(?<=[^\W\d_])["”*•°](\.*)(⟦\d+⟧)', r'\2\1', line['t'])  # sözcük"..."⟦4⟧ -> sözcük⟦4⟧...
+
+
 def link_stray_markers(page):
     """İşareti OCR'da tırnak/yıldız olarak bozulmuş dipnotları, bağlanmamış dipnot sayısı kadar aday varsa sırayla bağlar."""
     used = {int(i) for d in page['body'] for i in TOKEN.findall(d['t'])}
     free = [note_id for note_id, _ in page['notes'] if note_id not in used]
+    if not free:
+        return
     spots = [(d, m) for d in page['body'] for m in STRAY_QUOTE.finditer(d['t']) if unbalanced_quote(d['t'], m)]
-    if not free or len(spots) != len(free):
+    if len(spots) != len(free):
+        link_layer_markers(page, free)
         return
     for (line, match), note_id in reversed(list(zip(spots, free))):
         line['t'] = line['t'][:match.start()] + f'⟦{note_id}⟧' + line['t'][match.end():]

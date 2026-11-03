@@ -1,0 +1,92 @@
+{
+  "regex_fixes": [
+    [
+      "\\bNasiya",
+      "Nastya"
+    ],
+    [
+      "\\bmahküm\\b",
+      "mahkum"
+    ],
+    [
+      "\\bbarçası\\b",
+      "parçası"
+    ],
+    [
+      "\\bMuifak\\b",
+      "Mutfak"
+    ],
+    [
+      "\\bKostilyew",
+      "Kostilyev"
+    ],
+    [
+      "\\biçecegim\\b",
+      "içeceğim"
+    ],
+    [
+      "\\bDurdugun\\b",
+      "Durduğun"
+    ],
+    [
+      "\\bgördügün\\b",
+      "gördüğün"
+    ],
+    [
+      "\\bbemen\\b",
+      "hemen"
+    ],
+    [
+      "\\bbeybesiyle\\b",
+      "heybesiyle"
+    ],
+    [
+      "\\bDuydurnuz\\b",
+      "Duydunuz"
+    ],
+    [
+      "\\bbızlı\\b",
+      "hızlı"
+    ],
+    [
+      "\\bAynıdekor\\b",
+      "Aynı dekor"
+    ],
+    [
+      "\\bYaroslavPlıların\\b",
+      "Yaroslavl'lıların"
+    ],
+    [
+      "\\bLearin\\b",
+      "Lear'ın"
+    ],
+    [
+      "\\bSeriçe\\b",
+      "Sertçe"
+    ],
+    [
+      "\\bO dane\\b",
+      "O da ne"
+    ],
+    [
+      "\\bbalde\\b",
+      "halde"
+    ],
+    [
+      "\\bTutşu\\b",
+      "Tut şu"
+    ],
+    [
+      "\\byada\\b",
+      "ya da"
+    ],
+    [
+      "\\bEce, sahi",
+      "Eee, sahi"
+    ],
+    [
+      "\\bLes Fows\\b",
+      "Les Fous"
+    ]
+  ]
+}
