@@ -249,10 +249,29 @@ def reference_word_is_suspect(ref_word):
     return bool(REF_ODD_APOSTROPHE_SUFFIX.search(lowered))
 
 
+def ocr_confusion(ocr_norm, ref_norm):
+    """OCR'ın yüksek güvenle yaptığı iki karışıklık: 'ğ' yerine 'g' (oldugu) ve 'm' yerine 'rn' (ikirnizin)."""
+    if ocr_norm == ref_norm:
+        return False
+    if len(ocr_norm) == len(ref_norm):
+        return all(a == b or (a == 'g' and b == 'ğ') for a, b in zip(ocr_norm, ref_norm))
+    return ocr_norm.replace('rn', 'm') == ref_norm and VOCAB.get(ocr_norm, 0) < 3
+
+
 def apply_reference_word(ocr_word, ref_word, ocr_norm, ref_norm, rescue=False):
+    if not rescue and ocr_confusion(ocr_norm, ref_norm) and not reference_word_is_suspect(ref_word):
+        ocr_word['t'] = ref_word  # OCR bu karışıklıkları yüksek güvenle de yaptığı için güven puanına bakılmaz
+        return
     if reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm, rescue=rescue):
         ocr_word['t'] = ref_word
         ocr_word['c'] = max(ocr_word['c'], 60.0)
+
+
+def restore_apostrophe(ocr_word, ref_word):
+    """OCR'ın düşürdüğü kesme işareti (Myrtleı -> Myrtle'ı): sözcük yalnızca bu işaretle farklıdır."""
+    plain = re.sub(r"['’]", '', ref_word)
+    if plain != ref_word and plain == ocr_word['t']:
+        ocr_word['t'] = ref_word
 
 
 def apply_reference_footnote_marker(ocr_word, ref_word):
@@ -261,29 +280,39 @@ def apply_reference_footnote_marker(ocr_word, ref_word):
         ocr_word['t'] = re.sub(r'["”“\'’]?([.,;:!?)]*)$', marker.group(1) + r'\1', ocr_word['t'], count=1)
 
 
+def confirm_matching_word(ocr_word, ref_word, trusted):
+    """OCR ile metin katmanında aynı okunan sözcük: işaret, kesme işareti ve güven düzeltmeleri."""
+    apply_reference_footnote_marker(ocr_word, ref_word)
+    if not trusted:
+        return
+    restore_apostrophe(ocr_word, ref_word)
+    if ocr_word['c'] < 10:
+        ocr_word['c'] = 60.0  # metin katmanı doğruladı: güveni 0 okunan sözcük atılmaz
+
+
+def apply_reference_opcode(opcode, words, ref, norms, trusted):
+    """Hizalamanın bir parçasını (aynı ya da değişen sözcükler) OCR sözcüklerine uygular."""
+    tag, i1, i2, j1, j2 = opcode
+    ocr_norms, ref_norms = norms
+    if tag == 'equal':
+        for offset in range(i2 - i1):
+            confirm_matching_word(words[i1 + offset], ref[j1 + offset], trusted)
+    elif tag == 'replace' and i2 - i1 == j2 - j1:
+        for offset in range(i2 - i1):
+            apply_reference_word(words[i1 + offset], ref[j1 + offset], ocr_norms[i1 + offset],
+                                 ref_norms[j1 + offset], rescue=not trusted)
+
+
 def apply_reference_text(lines, page_name):
     page_key = os.path.basename(page_name)[:-4]
     ref = REFERENCE.get(page_key) or RESCUE_REFERENCE.get(page_key)
     if not ref:
         return lines
-    rescue = page_key not in REFERENCE
     words = [word for line in lines for word in line['words']]
-    ocr_norms = [norm_word(word['t']) for word in words]
-    ref_norms = [norm_word(text) for text in ref]
-    matcher = difflib.SequenceMatcher(None, ocr_norms, ref_norms, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == 'equal':
-            for offset in range(i2 - i1):
-                apply_reference_footnote_marker(words[i1 + offset], ref[j1 + offset])
-        elif tag == 'replace' and i2 - i1 == j2 - j1:
-            for offset in range(i2 - i1):
-                apply_reference_word(
-                    words[i1 + offset],
-                    ref[j1 + offset],
-                    ocr_norms[i1 + offset],
-                    ref_norms[j1 + offset],
-                    rescue=rescue,
-                )
+    norms = ([norm_word(word['t']) for word in words], [norm_word(text) for text in ref])
+    matcher = difflib.SequenceMatcher(None, *norms, autojunk=False)
+    for opcode in matcher.get_opcodes():
+        apply_reference_opcode(opcode, words, ref, norms, page_key in REFERENCE)
     for line in lines:
         finalize(line, line['words'])
     return lines
@@ -599,12 +628,17 @@ def trailing_body_end_before_notes(body):
     return end
 
 
+def is_note_separator(line):
+    """Dipnotlar arasındaki küçük '*' / '•' işareti satırı."""
+    return line['kind'] == 'break' and len(line['t'].strip()) <= 2
+
+
 def trailing_unmarked_note_start(body, end, page_h, B, H, base_width, spacing):
     index = end
     start = None
     while index > 1:
         line = body[index - 1]
-        if not line_is_small_footnote(line, B, H, base_width):
+        if not (line_is_small_footnote(line, B, H, base_width) or is_note_separator(line)):
             break
         index -= 1
         if line['y'] - body[index - 1]['y'] > 1.5 * spacing:
@@ -622,8 +656,13 @@ def recover_unmarked_footnotes(notes, body, page_h, B, H, base_width, spacing):
     start = trailing_unmarked_note_start(body, end, page_h, B, H, base_width, spacing)
     if start is None:
         return notes, body
-    recovered = join_lines(line['t'] for line in body[start:end])
-    return [recovered, *notes], body[:start]
+    chunks = [[]]
+    for line in body[start:end]:
+        if is_note_separator(line):
+            chunks.append([])  # işaret satırı bir sonraki dipnotu başlatır
+        else:
+            chunks[-1].append(line['t'])
+    return [*(join_lines(chunk) for chunk in chunks if chunk), *notes], body[:start]
 
 
 def bind_footnotes(notes, body):
@@ -647,6 +686,76 @@ def bind_footnotes(notes, body):
 
         line['t'] = MARK.sub(replace_marker, line['t'])
     return list(zip(note_ids, notes))
+
+
+NOTE_MARKS = frozenset('*•')
+NOTE_HEADWORD = re.compile(r"^([^\W\d_][\w'’-]*)\s*:")
+
+
+def body_part_of_layer(ref, notes):
+    """Metin katmanının dipnotlar başlamadan önceki kısmı; dipnotları ayıran '•' satırı da atılır."""
+    first = norm_word(notes[0][1].split(' ')[0]) if notes else ''
+    cut = next((i for i, token in enumerate(ref) if first and norm_word(token) == first), len(ref))
+    ref = ref[:cut]
+    while ref and set(ref[-1]) <= NOTE_MARKS:
+        ref = ref[:-1]
+    return ref
+
+
+def layer_marker_words(ref):
+    """Metin katmanında '*' / '•' işaretinden hemen önce gelen sözcükler (art arda işaretler tek sayılır)."""
+    found = []
+    for prev, token in successive_pairs(ref):
+        if token and set(token) <= NOTE_MARKS and not set(prev) <= NOTE_MARKS:
+            found.append(prev)
+    return found
+
+
+def find_marker_word(body, word, taken):
+    """Gövdede verilen sözcüğe en çok benzeyen (ilk) sözcük: (satır, indeks) ya da None."""
+    key = norm_word(word)
+    for line in body:
+        if line['kind'] != 'text':
+            continue
+        for index, token in enumerate(line['t'].split(' ')):
+            candidate = norm_word(token)
+            if candidate and (line['y'], index) not in taken and difflib.SequenceMatcher(None, key, candidate).ratio() >= 0.75:
+                return line, index
+    return None
+
+
+def attach_marker(body, word, note_id, taken):
+    spot = find_marker_word(body, word, taken)
+    if spot is None:
+        return
+    line, index = spot
+    tokens = line['t'].split(' ')
+    junk = "['’*•°]+$" if word.endswith(('"', '”')) else "['’\"”*•°]+$"
+    tokens[index] = re.sub(junk, '', tokens[index]) + f'⟦{note_id}⟧'  # OCR'ın işaret yerine okuduğu artık kalkar
+    line['t'] = ' '.join(tokens)
+    taken.add((line['y'], index))
+
+
+def link_unmarked_notes(notes, body, page_name):
+    """İşareti OCR'da düşmüş dipnotları metin katmanındaki işaretlerden, yoksa 'Sözcük: açıklama' başından bağlar."""
+    ref = REFERENCE.get(os.path.basename(page_name)[:-4])
+    used = {int(i) for d in body for i in re.findall(r'⟦(\d+)⟧', d['t'])}
+    free = [(note_id, text) for note_id, text in notes if note_id not in used]
+    if not free or not ref:
+        return
+    taken = set()
+    words = [w for w in layer_marker_words(body_part_of_layer(ref, free)) if find_marker_word(body, w, taken)]
+    if len(words) == len(free):
+        for (note_id, _), word in zip(free, words):
+            attach_marker(body, word, note_id, taken)
+    else:
+        for note_id, text in free:
+            match = NOTE_HEADWORD.match(text)
+            if match:
+                attach_marker(body, match.group(1), note_id, taken)
+    for line in body:
+        if line['kind'] == 'text' and taken:
+            line['t'] = re.sub(r'\s+[*•]+(?=\s|$)', '', line['t'])  # bağlanan işaretin OCR'daki yalnız artığı
 
 
 def add_body_metrics(body, B, R):
@@ -673,6 +782,8 @@ def mark_date_lines(body, B, R):
         before_ok = i == 0 or d['gap']
         next_line = body[i + 1] if i + 1 < len(body) else None
         after_ok = next_line is None or next_line['gap'] or next_line['rel'] < 0.15 * (R - B)
+        if next_line is not None and next_line['t'][:1].islower():
+            after_ok = False  # küçük harfle sürüyen cümle tarih satırı olamaz
         if before_ok and after_ok:
             d['kind'] = 'date'
 
@@ -699,6 +810,7 @@ def page(f):
     notes, body = split_footnotes(lines, page_h, H)
     notes, body = recover_unmarked_footnotes(notes, body, page_h, B, H, base_width, spacing)
     notes = bind_footnotes(notes, body)
+    link_unmarked_notes(notes, body, f)
     body = recover_gaps(f, body, B, R)
     add_body_metrics(body, B, R)
     mark_date_lines(body, B, R)
@@ -1514,6 +1626,18 @@ class BlockBuilder:
         return self.blocks
 
 
+def fill_leading_chapter_numbers(blocks):
+    """OCR'ın okuyamadığı tek haneli bölüm numaralarını (1-9) tamamlar: ilk numaralı başlık 10 ise ondan önceki
+    9 başlıksız bölüm 1-9'dur."""
+    chapters = [i for i, b in enumerate(blocks) if b[0] == 'chapter']
+    first = next((k for k, i in enumerate(chapters) if blocks[i][1]), None)
+    if first is None or not str(blocks[chapters[first]][1]).isdigit() or int(blocks[chapters[first]][1]) != first + 1:
+        return blocks
+    for k in range(first):
+        blocks[chapters[k]] = ('chapter', str(k + 1))
+    return blocks
+
+
 def build(pages):
     """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / deflist / break / note."""
     items = build_items(pages)
@@ -1521,4 +1645,4 @@ def build(pages):
     builder = BlockBuilder()
     for item in items:
         builder.add_item(item)
-    return builder.finish()
+    return fill_leading_chapter_numbers(builder.finish())

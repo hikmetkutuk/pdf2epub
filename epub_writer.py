@@ -75,6 +75,8 @@ def hyphen_fix(s):
             return m.group(0)
         if w in PROPER or w.split("'")[0] in PROPER:
             return a + '-' + w
+        if not any(ch.islower() for ch in a + w):  # tamamı büyük harfli metin: harfleri değiştirmeden birleştir
+            return a + w
         if w[0] in 'ŞB':
             return a + 'ğ' + w[1:]
         return a + w[0].lower() + w[1:]

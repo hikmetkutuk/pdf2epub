@@ -1,0 +1,144 @@
+{
+  "regex_fixes": [
+    [
+      "\\bTahrnin\\b",
+      "Tahmin"
+    ],
+    [
+      "\\btanırnadığımız\\b",
+      "tanımadığımız"
+    ],
+    [
+      "\\bhissetrnemiştim\\b",
+      "hissetmemiştim"
+    ],
+    [
+      "\\banlatrnak\\b",
+      "anlatmak"
+    ],
+    [
+      "\\büzüldürn\\b",
+      "üzüldüm"
+    ],
+    [
+      "\\betrne\\b",
+      "etme"
+    ],
+    [
+      "\\byernininde\\b",
+      "yemininde"
+    ],
+    [
+      "\\bdeğilrniş\\b",
+      "değilmiş"
+    ],
+    [
+      "\\bNeiş\\b",
+      "Ne iş"
+    ],
+    [
+      "\\bber konuda\\b",
+      "her konuda"
+    ],
+    [
+      "\\bone demekse\\b",
+      "o ne demekse"
+    ],
+    [
+      "\\bsex esas\\b",
+      "sen esas"
+    ],
+    [
+      "\\b20-Vle\\b",
+      "20-1'le"
+    ],
+    [
+      "\\bsunmuı\\b",
+      "sırtımı"
+    ],
+    [
+      "\\bArma benim\\b",
+      "Ama benim"
+    ],
+    [
+      "\\barna işte\\b",
+      "ama işte"
+    ],
+    [
+      "\\bolşam\\b",
+      "olsam"
+    ],
+    [
+      "\\bTannm\\b",
+      "Tanrım"
+    ],
+    [
+      "\\bTWye\\b",
+      "TV'ye"
+    ],
+    [
+      "\\bdevametti\\b",
+      "devam etti"
+    ],
+    [
+      "\\bdamümkündü\\b",
+      "da mümkündü"
+    ],
+    [
+      "\\bSatüm\\b",
+      "Satürn"
+    ],
+    [
+      "\\bVogwe\\b",
+      "Vogue"
+    ],
+    [
+      "\\bOuentin\\b",
+      "Quentin"
+    ],
+    [
+      "\\bSguare\\b",
+      "Square"
+    ],
+    [
+      "\\boldugu\\b",
+      "olduğu"
+    ],
+    [
+      "\\bScottın\\b",
+      "Scott'ın"
+    ],
+    [
+      "\\bEliottı\\b",
+      "Eliot'ı"
+    ],
+    [
+      "\\bONeill'di\\b",
+      "O'Neill'di"
+    ],
+    [
+      "\\bO©Neillle\\b",
+      "O'Neill'le"
+    ],
+    [
+      "\\bMyrtlela\\b",
+      "Myrtle'la"
+    ],
+    [
+      "\\bMyrtleın\\b",
+      "Myrtle'ın"
+    ],
+    [
+      "\\bBradcastera\\b",
+      "Bradcaster'a"
+    ],
+    [
+      "\\bNoePden\\b",
+      "Noel'den"
+    ],
+    [
+      "\\bNoele\\b",
+      "Noel'e"
+    ]
+  ]
+}
