@@ -1,0 +1,73 @@
+{
+  "untitled_chapters": true,
+  "regex_fixes": [
+    [
+      "\\bEİ falına",
+      "El falına"
+    ],
+    [
+      "\\bmasdya\\b",
+      "masaya"
+    ],
+    [
+      "\\bLafl Yeterince",
+      "Laf! Yeterince"
+    ],
+    [
+      "\\bonlarn\\b",
+      "onların"
+    ],
+    [
+      "\\başırılıklarndan\\b",
+      "aşırılıklarından"
+    ],
+    [
+      "\\bAbdülmünimt'i",
+      "Abdülmünim'i"
+    ],
+    [
+      "\\bbitımedin\\b",
+      "bitmedin"
+    ],
+    [
+      "\\bboşanınasıyla\\b",
+      "boşanmasıyla"
+    ],
+    [
+      "\\beksiltımiyor\\b",
+      "eksiltmiyor"
+    ],
+    [
+      "\\bsarınınş\\b",
+      "sarınmış"
+    ],
+    [
+      "\\btırmarnmakta\\b",
+      "tırmanmakta"
+    ],
+    [
+      "\\bÖrnrüm\\b",
+      "Ömrüm"
+    ],
+    [
+      "\\bsınıfn\\b",
+      "sınıfın"
+    ],
+    [
+      "\\bMuhanımed\\b",
+      "Muhammed"
+    ],
+    [
+      "\\bimanmak\\b",
+      "inanmak"
+    ],
+    [
+      "\\bHüseyim\\b",
+      "Hüseyin"
+    ],
+    [
+      "\\bbumun\\b",
+      "burnun"
+    ]
+  ]
+}

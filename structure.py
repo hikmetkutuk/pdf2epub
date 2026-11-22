@@ -106,6 +106,7 @@ def letters(t):
 
 HEADERS = []
 VERSE_MODE = False  # şiir kitabı kipi (verse.py)
+UNTITLED_CHAPTERS = False  # config: "untitled_chapters": başlıksız bölüm başı sayfaları da yeni bölüm olur
 HEADING_TITLES = []    # kitaba özel bölüm başlıkları (config: "headings"); OCR hatalarına karşı bulanık eşleşir
 HEADING_PATTERNS = []  # kitaba özel başlık düzenli ifadeleri (config: "heading_patterns")
 
@@ -249,17 +250,18 @@ def reference_word_is_suspect(ref_word):
     return bool(REF_ODD_APOSTROPHE_SUFFIX.search(lowered))
 
 
-def ocr_confusion(ocr_norm, ref_norm):
-    """OCR'ın yüksek güvenle yaptığı iki karışıklık: 'ğ' yerine 'g' (oldugu) ve 'm' yerine 'rn' (ikirnizin)."""
+def ocr_confusion(ocr_norm, ref_norm, soft_g_only=False):
+    """OCR'ın yüksek güvenle yaptığı iki karışıklık: 'ğ' yerine 'g' (oldugu) ve 'm' yerine 'rn' (ikirnizin).
+    Metin katmanı güvenilmezse yalnızca birincisi uygulanır; katman da 'rn'yi 'm' okuyabilir (kurnaz -> kumaz)."""
     if ocr_norm == ref_norm:
         return False
     if len(ocr_norm) == len(ref_norm):
         return all(a == b or (a == 'g' and b == 'ğ') for a, b in zip(ocr_norm, ref_norm))
-    return ocr_norm.replace('rn', 'm') == ref_norm and VOCAB.get(ocr_norm, 0) < 3
+    return not soft_g_only and ocr_norm.replace('rn', 'm') == ref_norm and VOCAB.get(ocr_norm, 0) < 3
 
 
 def apply_reference_word(ocr_word, ref_word, ocr_norm, ref_norm, rescue=False):
-    if not rescue and ocr_confusion(ocr_norm, ref_norm) and not reference_word_is_suspect(ref_word):
+    if ocr_confusion(ocr_norm, ref_norm, soft_g_only=rescue) and not reference_word_is_suspect(ref_word):
         ocr_word['t'] = ref_word  # OCR bu karışıklıkları yüksek güvenle de yaptığı için güven puanına bakılmaz
         return
     if reference_word_is_allowed(ocr_word, ref_word, ocr_norm, ref_norm, rescue=rescue):
@@ -388,10 +390,19 @@ def open_image_copy(path):
         return image.copy()
 
 
+def is_chapter_number_line(lines, page_h):
+    """Üstteki tek rakamlı satırın altında satır aralığının çok katı bir boşluk varsa sayfa değil bölüm numarasıdır."""
+    first = lines[0]
+    if len(lines) < 3 or first['y'] < page_h * 0.1 or not PAGE_NUM.fullmatch(first['t'].strip()):
+        return False
+    spacings = [b['y'] - a['y'] for a, b in successive_pairs(lines[1:])]
+    return lines[1]['y'] - first['y'] > 4 * st.median(spacings)
+
+
 def drop_page_numbers(lines, page_h):
     if lines and is_page_number_noise(lines[-1], page_h, at_bottom=True):
         lines = lines[:-1]
-    if lines and is_page_number_noise(lines[0], page_h, at_bottom=False):
+    if lines and is_page_number_noise(lines[0], page_h, at_bottom=False) and not is_chapter_number_line(lines, page_h):
         lines = lines[1:]
     return lines
 
@@ -1239,7 +1250,7 @@ def build_items(pages):
     for pg in pages:
         page_title = pg.get('title')
         chapter_start = page_starts_chapter(pg, page_title) and (page_title or not continues_sentence(items))
-        if chapter_start and not page_title and current_title:
+        if chapter_start and not page_title and current_title and not UNTITLED_CHAPTERS:
             items.append({'kind': 'break'})  # başlıklı bölüm içinde başlıksız boşluk: sahne geçişi
             chapter_start = False
         elif chapter_start:
@@ -1638,6 +1649,17 @@ def fill_leading_chapter_numbers(blocks):
     return blocks
 
 
+def renumber_sequential_chapters(blocks):
+    """Numaralı bölümlerin çoğu sıra numarasıyla örtüşüyorsa (1, 2, 3...), OCR'ın bozduğu numaralar sıraya göre düzeltilir."""
+    chapters = [i for i, b in enumerate(blocks) if b[0] == 'chapter']
+    matches = sum(1 for k, i in enumerate(chapters) if blocks[i][1] == str(k + 1))
+    if len(chapters) < 5 or matches < 0.6 * len(chapters):
+        return blocks
+    for k, i in enumerate(chapters):
+        blocks[i] = ('chapter', str(k + 1))
+    return blocks
+
+
 def build(pages):
     """Bütün sayfaları bloklara dönüştürür: chapter / p / verse / deflist / break / note."""
     items = build_items(pages)
@@ -1645,4 +1667,4 @@ def build(pages):
     builder = BlockBuilder()
     for item in items:
         builder.add_item(item)
-    return fill_leading_chapter_numbers(builder.finish())
+    return renumber_sequential_chapters(fill_leading_chapter_numbers(builder.finish()))

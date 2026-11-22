@@ -79,6 +79,8 @@ def hyphen_fix(s):
             return a + w
         if w[0] in 'ŞB':
             return a + 'ğ' + w[1:]
+        if w[0] == 'İ':  # satır başındaki 'l' büyük 'İ' okunmuş: ünlü öncesinde 'l', değilse 'i' (bülbü- İün -> bülbülün)
+            return a + ('l' if w[1:2] in tuple('aeıioöuüAEIİOÖUÜ') else 'i') + w[1:]
         return a + w[0].lower() + w[1:]
     return re.sub(rf"([^\W\d_]+)- ([A-ZÇĞİÖŞÜ]{LETTER_OR_APOSTROPHE}*)", rep, s)
 

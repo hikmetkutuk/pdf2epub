@@ -9,6 +9,7 @@ Ayrıntılar için README.md dosyasına bakın.
 """
 
 import argparse
+import collections
 import difflib
 import importlib
 import json
@@ -440,12 +441,16 @@ def normalized_ocr_words(path):
 
 
 def count_confident_text_layer_differences(ocr, ref):
+    """Güveni yüksek OCR sözcüklerinden metin katmanından farklı olanlar; otomatik düzeltilen karışıklıklar (oldugu/olduğu) sayılmaz."""
     total = different = 0
     matcher = difflib.SequenceMatcher(None, [word for word, _ in ocr], ref, autojunk=False)
-    for tag, i1, i2, _, _ in matcher.get_opcodes():
-        confident_words = sum(1 for index in range(i1, i2) if ocr[index][1] >= 95)
-        total += confident_words
-        different += confident_words if tag != 'equal' else 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        confident = [index for index in range(i1, i2) if ocr[index][1] >= 95]
+        total += len(confident)
+        if tag == 'equal':
+            continue
+        paired = tag == 'replace' and i2 - i1 == j2 - j1
+        different += sum(1 for index in confident if not (paired and structure.ocr_confusion(ocr[index][0], ref[j1 + index - i1])))
     return total, different
 
 
@@ -573,6 +578,61 @@ def build_blocks_from_files(files, img_dir, tess, tess_args, verbose, doc=None, 
     return play.build(pages) if play_mode else structure.build(pages)
 
 
+LAYER_CONFUSIONS = (  # (OCR'ın yazdığı, doğrusu, katmanda en az kaç kez geçmeli): OCR'ın yaptığı yönde
+    ('ın', 'm', 3),    # yağınur -> yağmur
+    ('i', 'ı', 3),     # olmasi -> olması
+    ('rn', 'm', 10),   # kernal -> kemal; katman da rn'yi m okur (kopernik -> kopemik), bu yüzden eşik yüksek
+)
+
+
+def layer_word_counts(doc):
+    text = ' '.join(page.get_text() for page in doc).replace('\xad\n', '').replace('\xad', '')
+    return collections.Counter(structure.tr_lower(word) for word in re.findall(r"[^\W\d_]+", text))
+
+
+def confusion_variants(word, counts):
+    """Sözcüğün OCR karışıklığıyla düzeltilmiş, metin katmanında yeterince sık geçen hâlleri."""
+    for wrong, right, minimum in LAYER_CONFUSIONS:
+        for match in re.finditer(wrong, word):
+            variant = word[:match.start()] + right + word[match.end():]
+            if counts.get(variant, 0) >= minimum:
+                yield variant
+
+
+def fix_word_by_layer(word, counts):
+    """Metin katmanında hiç geçmeyen sözcük, OCR karışıklığıyla düzeltilince katmanda sık geçen bir sözcüğe dönüşüyorsa düzeltilir."""
+    lowered = structure.tr_lower(word)
+    if len(word) < 4 or lowered in counts or word.isupper():
+        return word
+    best = max(confusion_variants(lowered, counts), key=lambda v: counts[v], default=None)
+    if best is None:
+        return word
+    return best if word.islower() else best[:1].replace('i', 'İ').upper() + best[1:]
+
+
+def apply_layer_vocabulary(blocks, doc):
+    counts = layer_word_counts(doc)
+    changed = [0]
+
+    def fix_text(text):
+        def sub(match):
+            fixed = fix_word_by_layer(match.group(0), counts)
+            changed[0] += fixed != match.group(0)
+            return fixed
+        return re.sub(r"[^\W\d_]+", sub, text)
+
+    out = []
+    for block in blocks:
+        if block[0] in ('p', 'chapter', 'subhead', 'dialogue', 'direction', 'note') and isinstance(block[1], str):
+            block = (block[0], fix_text(block[1]), *block[2:])
+        elif block[0] == 'verse':
+            block = (block[0], [fix_text(line) for line in block[1]], *block[2:])
+        out.append(block)
+    if changed[0]:
+        print(f'  metin katmanı sözcük dağarcığıyla {changed[0]} OCR hatası düzeltildi')
+    return out
+
+
 def drop_short_preface(blocks):
     first = next((i for i, b in enumerate(blocks) if b[0] == 'chapter'), None)
     if not first:
@@ -603,12 +663,14 @@ def load_heading_config(config_path):
     structure.HEADING_TITLES[:] = []
     structure.HEADING_PATTERNS[:] = []
     verse.POEM_CHAPTERS = False
+    structure.UNTITLED_CHAPTERS = False
     if config_path:
         with open(config_path, encoding='utf-8') as f:
             cfg = json.load(f)
         structure.HEADING_TITLES.extend(cfg.get('headings', []))
         structure.HEADING_PATTERNS.extend(cfg.get('heading_patterns', []))
         verse.POEM_CHAPTERS = bool(cfg.get('poem_chapters'))
+        structure.UNTITLED_CHAPTERS = bool(cfg.get('untitled_chapters'))
 
 
 def load_prose_pages(config_path, page_count):
@@ -626,6 +688,7 @@ def build_book_structure(doc, names, paths, tess, tess_args, args, title):
     blocks = build_blocks_from_files(files, paths['img_dir'], tess, tess_args, args.verbose, doc,
                                      args.lang, args.verse, load_prose_pages(args.config, len(doc)), args.play)
     blocks = drop_short_preface(blocks)
+    blocks = apply_layer_vocabulary(blocks, doc)
     blocks = drop_duplicate_title_page(blocks, title)
     with open(os.path.join(paths['work_dir'], 'blocks.json'), 'w', encoding='utf-8') as f:
         json.dump(blocks, f, ensure_ascii=False, indent=0)
