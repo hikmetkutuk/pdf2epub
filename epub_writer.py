@@ -131,16 +131,21 @@ def quote_opens_current_word(text):
     return word_start > 0 and text[word_start - 1] in '"“'
 
 
-def fix(s):
+def apply_config_fixes(s):
     for a, b in CFG.get('regex_fixes', []):
         s = re.sub(a, b, s)
     for a, b in CFG.get('fixes', {}).items():
         s = re.sub(r'(?<!\w)' + re.escape(a) + r'(?!\w)', b, s)
+    return s
+
+
+def fix(s):
+    s = apply_config_fixes(s)
     s = fix_question_mark_apostrophes(s)
     s = re.sub(r'\bk1\b', 'ki', s)
     s = re.sub(r'(?<=[a-zçğıöşü])[01](?=[a-zçğıöşü])', lambda m: 'o' if m.group(0) == '0' else 'ı', s)
     s = re.sub(r'\b1(?=[a-zçğıöşü]{2,})', '', s)
-    s = hyphen_fix(s)
+    s = apply_config_fixes(hyphen_fix(s))  # satır sonu tireleri birleşince oluşan hatalar için ikinci geçiş
     s = re.sub(r'([.!?…]) [a-zı]{1,2}$', r'\1', s)
     def rep(m):
         w = m.group(0)
